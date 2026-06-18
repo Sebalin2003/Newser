@@ -1,0 +1,16 @@
+# =============================================================================
+# .streamlit/config.toml — Tema global (design.md §2)
+# Paleta "Tech Blue" — todos los colores gestionados por Streamlit nativamente.
+# =============================================================================
+
+[theme]
+base                    = "dark"
+primaryColor            = "#2F6FED"
+backgroundColor         = "#0B1020"
+secondaryBackgroundColor = "#111827"
+textColor               = "#E5E7EB"
+font                    = "sans serif"
+
+# [server]
+# port = 8501
+# headless = true

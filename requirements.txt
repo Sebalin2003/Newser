@@ -1,0 +1,35 @@
+# =============================================================================
+# News Trend Analyzer - Dependencias del Proyecto
+# =============================================================================
+# Instalación: pip install -r requirements.txt
+# Post-install: python -m spacy download en_core_web_sm
+
+# --- Core de datos y configuración ---
+pandas>=2.1.0
+pyyaml>=6.0.1
+python-dotenv>=1.0.0
+numpy>=1.26.0
+
+# --- Extracción de datos (HTTP, RSS y scraping) ---
+requests>=2.31.0
+feedparser>=6.0.11
+beautifulsoup4>=4.12.0   # scraping github.com/trending
+
+# --- Base de datos ---
+sqlalchemy>=2.0.25
+
+# --- NLP y Machine Learning ---
+scikit-learn>=1.4.0
+spacy>=3.7.0
+
+# --- Inteligencia Artificial ---
+google-genai>=1.0.0          # Motor IA: Gemini
+
+# --- Dashboard e interfaz ---
+streamlit>=1.36.0
+streamlit-autorefresh>=1.0.1
+plotly>=5.18.0
+
+sentence-transformers>=2.0.0
+torch>=2.0.0
+APScheduler==3.10.4

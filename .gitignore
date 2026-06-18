@@ -1,0 +1,52 @@
+# =============================================================================
+# .gitignore — News Trend Analyzer
+# =============================================================================
+
+# --- Entorno virtual ---
+venv/
+.venv/
+env/
+ENV/
+
+# --- Credenciales (NUNCA subir al repo) ---
+.env
+
+# --- Base de datos local ---
+*.db
+*.sqlite
+*.sqlite3
+
+# --- Python cache ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+.pytest_cache/
+
+# --- Distribución ---
+dist/
+build/
+*.egg-info/
+*.egg
+
+# --- IDEs ---
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# --- Logs ---
+*.log
+logs/
+
+# --- Local agent/tooling artifacts ---
+.agents/
+ui-verification/
+
+# --- Streamlit ---
+.streamlit/*
+!.streamlit/config.toml
+
+# --- OS ---
+.DS_Store
+Thumbs.db

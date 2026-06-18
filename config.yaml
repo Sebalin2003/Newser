@@ -1,0 +1,184 @@
+# =============================================================================
+# News Trend Analyzer - Configuración Principal
+# =============================================================================
+
+app:
+  nombre: "News Trend Analyzer"
+  version: "2.0.0"
+  timeout_request: 15         # Segundos antes de abortar una petición HTTP
+  max_noticias_ia: 0          # 0 desactiva resúmenes individuales automáticos para proteger cuota Gemini
+  top_tendencias: 10          # Número de términos en el ranking de tendencias NLP
+  clustering_umbral: 0.65     # Umbral de similitud coseno para agrupar noticias
+  clustering_ventana_horas: 24  # Ventana temporal del clustering diario
+  top_entidades: 8            # Top entidades para el gráfico de tendencias 7 días
+  # --- Ingesta GitHub ---
+  hn_min_score: 100           # Score mínimo HN Firebase (top stories del momento)
+  github_trending_count: 25   # Repos por ventana temporal (hoy y 7d por separado)
+  github_trending_dias_hoy: 1        # Ventana "Monitoreo de Hoy"
+  github_trending_dias_semanal: 7    # Ventana "Tendencias 7 Días"
+  # --- Ingesta HN histórica (Algolia API) ---
+  hn_algolia_min_score: 50    # Umbral más bajo que Firebase (histórico 7d)
+  hn_algolia_count: 100       # Stories históricas a recuperar por ronda
+  global_news_count: 15       # Reuters + GitHub Blog + OpenAI Blog para el feed local
+
+# -----------------------------------------------------------------------------
+# Fuentes de Datos (PRD Developer Pulse Edition)
+# Campos: nombre, tipo (rss|github_api|hn_api), activa, autoridad (0.0–1.0), peso_plataforma
+# peso_plataforma: factor de ponderación por plataforma (GitHub 1.5x, HN 1.2x, Reddit 0.8x)
+# -----------------------------------------------------------------------------
+fuentes:
+  - nombre: "GitHub Trending"
+    url: "https://api.github.com/repos"  # placeholder; la lógica usa el endpoint trending
+    tipo: github_api
+    activa: true
+    autoridad: 0.95
+    peso_plataforma: 1.5
+
+  - nombre: "Hacker News"
+    url: "https://hacker-news.firebaseio.com/v0"  # HN Firebase API
+    tipo: hn_api
+    activa: true
+    autoridad: 0.88
+    peso_plataforma: 1.2
+
+  - nombre: "Global IT Brief"
+    url: "curated://reuters-github-openai"
+    tipo: global_news
+    activa: true
+    autoridad: 0.92
+    peso_plataforma: 1.1
+
+  - nombre: "Reddit Tech"
+    url: "https://www.reddit.com/r/programming+MachineLearning+dataengineering/top/.rss?t=day"
+    tipo: rss
+    activa: false  # pendiente de credenciales Reddit OAuth
+    autoridad: 0.72
+    peso_plataforma: 0.8
+
+
+# -----------------------------------------------------------------------------
+# Áreas de Interés y Palabras Clave
+# Lógica inclusiva OR: relevante si contiene AL MENOS UNA keyword en título+descripción.
+# -----------------------------------------------------------------------------
+areas_interes:
+  inteligencia_artificial:
+    - "artificial intelligence"
+    - "machine learning"
+    - "deep learning"
+    - "neural network"
+    - "llm"
+    - "gpt"
+    - "openai"
+    - "gemini"
+    - "claude"
+    - "generative ai"
+    - "inteligencia artificial"
+    - "aprendizaje automático"
+    - "chatbot"
+    - "ai"
+    - "large language model"
+    - "transformer"
+    - "diffusion model"
+    - "mlops"
+
+  ciberseguridad:
+    - "cybersecurity"
+    - "hacking"
+    - "ransomware"
+    - "data breach"
+    - "vulnerability"
+    - "malware"
+    - "phishing"
+    - "exploit"
+    - "zero-day"
+    - "ciberseguridad"
+    - "seguridad informática"
+    - "firewall"
+    - "threat actor"
+    - "zero day"
+
+  cloud_computing:
+    - "cloud computing"
+    - "aws"
+    - "azure"
+    - "google cloud"
+    - "kubernetes"
+    - "docker"
+    - "serverless"
+    - "microservices"
+    - "devops"
+    - "infrastructure"
+    - "saas"
+    - "paas"
+    - "terraform"
+    - "platform engineering"
+
+  startups_tecnologia:
+    - "startup"
+    - "venture capital"
+    - "series a"
+    - "series b"
+    - "series c"
+    - "funding"
+    - "unicorn"
+    - "ipo"
+    - "acquisition"
+    - "fintech"
+    - "silicon valley"
+    - "seed round"
+    - "valuation"
+
+  semiconductores:
+    - "semiconductor"
+    - "chip"
+    - "nvidia"
+    - "intel"
+    - "amd"
+    - "arm"
+    - "processor"
+    - "gpu"
+    - "quantum computing"
+    - "moore's law"
+    - "tsmc"
+    - "wafer"
+    - "silicon"
+    - "hardware"
+
+  data_engineering:
+    - "data engineering"
+    - "data pipeline"
+    - "apache spark"
+    - "apache kafka"
+    - "dbt"
+    - "data lake"
+    - "data warehouse"
+    - "etl"
+    - "elt"
+    - "databricks"
+    - "snowflake"
+    - "data mesh"
+    - "lakehouse"
+
+  arquitectura_software:
+    - "software architecture"
+    - "design pattern"
+    - "distributed systems"
+    - "event driven"
+    - "api design"
+    - "graphql"
+    - "rest api"
+    - "grpc"
+    - "monolith"
+    - "clean architecture"
+    - "domain driven"
+
+  ciencias_computacion:
+    - "algorithm"
+    - "computer science"
+    - "cryptography"
+    - "computational complexity"
+    - "data structure"
+    - "formal verification"
+    - "programming language"
+    - "compiler"
+    - "operating system"
