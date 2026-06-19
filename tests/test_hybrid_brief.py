@@ -16,6 +16,84 @@ class TestSchema(unittest.TestCase):
 
         self.assertIn("brief_json", columns)
 
+    def test_noticias_has_selected_score_columns(self) -> None:
+        from sqlalchemy import inspect
+
+        from src.database import engine, init_db
+
+        init_db()
+        columns = {column["name"] for column in inspect(engine).get_columns("noticias")}
+
+        self.assertIn("selected_score", columns)
+        self.assertIn("score_components_json", columns)
+        self.assertIn("tags_json", columns)
+        self.assertIn("selection_reason", columns)
+
+
+class TestArticleScoring(unittest.TestCase):
+    def test_ai_story_outscores_generic_startup_story(self) -> None:
+        from datetime import datetime, timezone
+
+        from src.scoring import calculate_item_score
+
+        now = datetime(2026, 6, 18, 12, tzinfo=timezone.utc)
+        ai_item = {
+            "titulo": "OpenAI releases new agent model for developers",
+            "descripcion_original": "The model improves coding workflows.",
+            "fuente": "OpenAI Blog",
+            "area_matcheada": "inteligencia_artificial",
+            "fecha_ingesta": now,
+        }
+        generic_item = {
+            "titulo": "Startup raises seed funding for marketplace app",
+            "descripcion_original": "The company plans to hire.",
+            "fuente": "Reuters",
+            "area_matcheada": "startups_tecnologia",
+            "fecha_ingesta": now,
+        }
+
+        self.assertGreater(
+            calculate_item_score(ai_item, now=now).selected_score,
+            calculate_item_score(generic_item, now=now).selected_score,
+        )
+
+    def test_trusted_source_boosts_score(self) -> None:
+        from datetime import datetime, timezone
+
+        from src.scoring import calculate_item_score
+
+        now = datetime(2026, 6, 18, 12, tzinfo=timezone.utc)
+        base = {
+            "titulo": "AI developer tool improves inference workflow",
+            "descripcion_original": "A technical release for model operations.",
+            "area_matcheada": "inteligencia_artificial",
+            "fecha_ingesta": now,
+        }
+
+        trusted = calculate_item_score({**base, "fuente": "GitHub Blog"}, now=now)
+        unknown = calculate_item_score({**base, "fuente": "Random Blog"}, now=now)
+
+        self.assertGreater(trusted.selected_score, unknown.selected_score)
+
+    def test_freshness_decay_reduces_old_items(self) -> None:
+        from datetime import datetime, timedelta, timezone
+
+        from src.scoring import calculate_item_score
+
+        now = datetime(2026, 6, 18, 12, tzinfo=timezone.utc)
+        fresh = {
+            "titulo": "Critical AI security vulnerability disclosed",
+            "fuente": "Reuters",
+            "area_matcheada": "ciberseguridad",
+            "fecha_ingesta": now,
+        }
+        old = {**fresh, "fecha_ingesta": now - timedelta(days=5)}
+
+        self.assertGreater(
+            calculate_item_score(fresh, now=now).selected_score,
+            calculate_item_score(old, now=now).selected_score,
+        )
+
 
 class TestGlobalNews(unittest.TestCase):
     def test_normalize_global_item_rejects_untrusted_source_and_dedupes_urls(self) -> None:
@@ -91,7 +169,9 @@ class TestHybridPayload(unittest.TestCase):
                 "title": f"Repo {i}",
                 "source": "GitHub Trending",
                 "url": f"https://github.com/x/{i}",
-                "score": i,
+                "selected_score": i,
+                "tags": ["Developer Tools"],
+                "selection_reason": "Seleccionado por relevancia tecnica.",
             }
             for i in range(20)
         ]
@@ -99,9 +179,11 @@ class TestHybridPayload(unittest.TestCase):
         payload = build_hybrid_brief_payload(global_items, local_items, date(2026, 6, 17))
 
         self.assertEqual(payload["date"], "2026-06-17")
-        self.assertEqual(len(payload["global_news"]), 10)
-        self.assertEqual(len(payload["developer_signals"]), 15)
+        self.assertEqual(len(payload["global_news"]), 8)
+        self.assertEqual(len(payload["developer_signals"]), 7)
+        self.assertEqual(len(payload["source_records"]), 15)
         self.assertTrue(payload["global_news"][0]["url"].startswith("https://www.reuters.com/"))
+        self.assertEqual(payload["developer_signals"][0]["score"], 19)
 
     def test_gemini_failure_does_not_use_low_volume_fallback_when_articles_exist(self) -> None:
         import src.processor as processor
@@ -215,6 +297,7 @@ class TestHybridPayload(unittest.TestCase):
             patch.object(processor, "cargar_config_procesador", return_value={"app": {"top_tendencias": 5, "max_noticias_ia": 10}, "areas_interes": {}}), \
             patch.object(processor, "calcular_tendencias", return_value=[]), \
             patch.object(processor, "clustering_diario", return_value={"clusters_generados": 0, "noticias_agrupadas": 0}), \
+            patch.object(processor, "score_recent_items", return_value=0), \
             patch.object(processor, "enriquecer_con_ia") as enriquecer, \
             patch.object(processor, "generar_macro_resumen_dia", return_value={"macro_resumen_generado": True, "uso_api": False}):
             processor.ejecutar_procesamiento()
@@ -228,6 +311,7 @@ class TestHybridPayload(unittest.TestCase):
             patch.object(processor, "cargar_config_procesador", return_value={"app": {"top_tendencias": 5, "max_noticias_ia": 0}, "areas_interes": {}}), \
             patch.object(processor, "calcular_tendencias", return_value=[]), \
             patch.object(processor, "clustering_diario", return_value={"clusters_generados": 0, "noticias_agrupadas": 0}), \
+            patch.object(processor, "score_recent_items", return_value=0), \
             patch.object(processor, "enriquecer_con_ia") as enriquecer, \
             patch.object(processor, "generar_macro_resumen_dia", return_value={"macro_resumen_generado": True, "uso_api": False}):
             result = processor.ejecutar_procesamiento()
@@ -242,6 +326,7 @@ class TestHybridPayload(unittest.TestCase):
             patch.object(processor, "cargar_config_procesador", return_value={"app": {"top_tendencias": 5}, "areas_interes": {}}), \
             patch.object(processor, "calcular_tendencias", return_value=[]), \
             patch.object(processor, "clustering_diario", return_value={"clusters_generados": 0, "noticias_agrupadas": 0}), \
+            patch.object(processor, "score_recent_items", return_value=0), \
             patch.object(processor, "enriquecer_con_ia") as enriquecer, \
             patch.object(processor, "generar_macro_resumen_dia", return_value={"macro_resumen_generado": True, "uso_api": False}):
             result = processor.ejecutar_procesamiento()
@@ -280,6 +365,33 @@ class TestHybridPayload(unittest.TestCase):
 
         self.assertTrue(result)
         client.assert_not_called()
+
+    def test_macro_cache_matches_same_selected_source_set(self) -> None:
+        import json
+
+        import src.processor as processor
+
+        payload = {
+            "source_records": [
+                {
+                    "name": "GitHub Blog",
+                    "url": "https://github.blog/example",
+                    "title": "Example",
+                    "score": 88.0,
+                    "score_version": processor.SCORE_VERSION,
+                }
+            ]
+        }
+        signature = processor._payload_signature(payload)
+        existing = type("ExistingMacro", (), {
+            "modelo": processor.GEMINI_MODEL,
+            "brief_json": json.dumps({
+                "source_signature": signature,
+                "score_version": processor.SCORE_VERSION,
+            }),
+        })()
+
+        self.assertTrue(processor._macro_cache_matches(existing, signature))
 
 
 class TestGlobalNewsIngestion(unittest.TestCase):
@@ -370,6 +482,23 @@ class TestBriefUi(unittest.TestCase):
             normalized["sources"],
             [{"name": "Reuters", "url": "https://www.reuters.com/world/example/"}],
         )
+
+    def test_select_featured_items_uses_score_and_source_diversity(self) -> None:
+        import pandas as pd
+
+        from app import _select_featured_items
+
+        df = pd.DataFrame([
+            {"Título": f"HN story {i}", "Fuente": "Hacker News", "Área": "inteligencia_artificial", "Selected Score": 95 - i}
+            for i in range(5)
+        ] + [
+            {"Título": "Reuters story", "Fuente": "Reuters", "Área": "ciberseguridad", "Selected Score": 89}
+        ])
+
+        selected = _select_featured_items(df, limit=5, threshold=70)
+
+        self.assertLessEqual((selected["Fuente"] == "Hacker News").sum(), 3)
+        self.assertIn("Reuters", selected["Fuente"].tolist())
 
 
 if __name__ == "__main__":

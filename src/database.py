@@ -94,6 +94,12 @@ class Noticia(Base):
     ranking: int = Column(Integer, nullable=True)  # posición en la fuente original (1-based)
     num_comentarios: int = Column(Integer, nullable=True)
     score: int = Column(Integer, nullable=True)
+    selected_score: float = Column(Float, nullable=True)
+    score_components_json: str = Column(Text, nullable=True)
+    tags_json: str = Column(Text, nullable=True)
+    selection_reason: str = Column(Text, nullable=True)
+    scored_at: datetime = Column(DateTime, nullable=True)
+    score_version: str = Column(String(64), nullable=True)
 
     def __repr__(self) -> str:
         return f"<Noticia id={self.id[:8]}... titulo='{self.titulo[:40]}'>"
@@ -249,6 +255,12 @@ def migrar_schema() -> None:
             "ranking":        "ALTER TABLE noticias ADD COLUMN ranking INTEGER",
             "num_comentarios": "ALTER TABLE noticias ADD COLUMN num_comentarios INTEGER",
             "score":          "ALTER TABLE noticias ADD COLUMN score INTEGER",
+            "selected_score": "ALTER TABLE noticias ADD COLUMN selected_score FLOAT",
+            "score_components_json": "ALTER TABLE noticias ADD COLUMN score_components_json TEXT",
+            "tags_json": "ALTER TABLE noticias ADD COLUMN tags_json TEXT",
+            "selection_reason": "ALTER TABLE noticias ADD COLUMN selection_reason TEXT",
+            "scored_at": "ALTER TABLE noticias ADD COLUMN scored_at DATETIME",
+            "score_version": "ALTER TABLE noticias ADD COLUMN score_version VARCHAR(64)",
         }
 
         with engine.begin() as conn:

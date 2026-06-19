@@ -195,6 +195,10 @@ def _obtener_noticias(
                 "Ingestada":      n.fecha_ingesta.isoformat() if n.fecha_ingesta else None,
                 "entidades_json": n.entidades_json or "[]",
                 "Sentimiento":    n.sentimiento or "neutral",
+                "Selected Score":  n.selected_score,
+                "Tags":            n.tags_json or "[]",
+                "Motivo seleccion": n.selection_reason or "",
+                "Score Version":   n.score_version or "",
             })
     if not registros:
         return pd.DataFrame()
@@ -548,6 +552,10 @@ def _obtener_noticias_hoy() -> pd.DataFrame:
                 "Ranking":     n.ranking,
                 "Comentarios": n.num_comentarios,
                 "Score":       n.score,
+                "Selected Score": n.selected_score,
+                "Tags":        n.tags_json or "[]",
+                "Motivo seleccion": n.selection_reason or "",
+                "Score Version": n.score_version or "",
             })
     if not registros:
         return pd.DataFrame()
@@ -570,6 +578,104 @@ def _feed_card_metric_text(fuente: str, metrica: int, points_val: Any = None) ->
     if fuente == "GitHub Trending":
         return f"⭐ {metrica:,} stars today"
     return None
+
+
+def _parse_tags(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [str(v) for v in value if str(v).strip()]
+    if not value or str(value) == "nan":
+        return []
+    try:
+        parsed = json.loads(str(value))
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(parsed, list):
+        return []
+    return [str(v) for v in parsed if str(v).strip()]
+
+
+def _selected_score_value(row: dict | pd.Series) -> float:
+    try:
+        value = row.get("Selected Score", 0)
+    except AttributeError:
+        value = 0
+    if value is None or pd.isna(value):
+        return 0.0
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _select_featured_items(df: pd.DataFrame, limit: int = 8, threshold: float = 70.0) -> pd.DataFrame:
+    if df.empty or "Selected Score" not in df.columns:
+        return pd.DataFrame()
+    candidates = df.copy()
+    candidates["_selected_score"] = candidates.apply(_selected_score_value, axis=1)
+    if candidates["_selected_score"].max() <= 0:
+        return pd.DataFrame()
+    candidates = candidates.sort_values("_selected_score", ascending=False)
+    qualified = candidates[candidates["_selected_score"] >= threshold]
+    if len(qualified) < min(4, len(candidates)):
+        qualified = candidates.head(max(limit, min(4, len(candidates))))
+
+    selected_rows = []
+    source_counts: Counter = Counter()
+    area_counts: Counter = Counter()
+    for _, row in qualified.iterrows():
+        source = row.get("Fuente", "")
+        area = row.get("Área", "general")
+        if source_counts[source] >= 3 or area_counts[area] >= 4:
+            continue
+        selected_rows.append(row)
+        source_counts[source] += 1
+        area_counts[area] += 1
+        if len(selected_rows) >= limit:
+            break
+    return pd.DataFrame(selected_rows).drop(columns=["_selected_score"], errors="ignore")
+
+
+def _render_selected_section(df_hoy: pd.DataFrame, filtros: dict) -> None:
+    df = df_hoy.copy()
+    if not df.empty:
+        if filtros.get("fuentes"):
+            df = df[df["Fuente"].isin(filtros["fuentes"])]
+        if filtros.get("areas_keys"):
+            df = df[df["Área"].isin(filtros["areas_keys"])]
+
+    selected = _select_featured_items(df)
+    if selected.empty:
+        return
+
+    st.subheader("Selected")
+    st.caption("Señales de mayor prioridad calculadas localmente; Gemini no se usa para esta selección.")
+
+    for _, row in selected.iterrows():
+        score = _selected_score_value(row)
+        tags = _parse_tags(row.get("Tags"))
+        reason = str(row.get("Motivo seleccion") or "").strip()
+        description = str(row.get("Resumen IA") or "").strip()
+        if not description or description == "Resumen no disponible":
+            description = str(row.get("Descripción") or "").strip()
+        if not description:
+            description = "Sin descripcion disponible."
+
+        with st.container(border=True):
+            meta_col, score_col = st.columns([5, 1])
+            with meta_col:
+                st.caption(f"{row.get('Fuente', '')} · {_area_label(row.get('Área', 'general'))}")
+                st.markdown(f"##### {row.get('Label') or row.get('Título', '')}")
+            with score_col:
+                st.metric("Score", f"{score:.0f}")
+            if tags:
+                st.caption(" · ".join(tags))
+            st.caption(description[:260] + ("..." if len(description) > 260 else ""))
+            if reason:
+                st.info(reason)
+            url = str(row.get("URL") or "")
+            if url.startswith("http"):
+                st.link_button("Leer original", url)
+    st.divider()
 
 
 def _render_feed_card(row: dict) -> None:
@@ -599,6 +705,10 @@ def _render_feed_card(row: dict) -> None:
         with col_meta:
             st.markdown(badge)
             st.caption(fuente)
+            selected_score = _selected_score_value(row)
+            tags = _parse_tags(row.get("Tags"))
+            if selected_score:
+                st.caption(f"Score {selected_score:.0f}" + (f" · {' · '.join(tags[:3])}" if tags else ""))
         with col_time:
             st.caption(tiempo_str)
 
@@ -771,6 +881,17 @@ def _render_panel_signals(df_hoy: pd.DataFrame) -> None:
     if df_hoy.empty:
         st.info("Sin datos para generar señales.", icon="ℹ️")
         return
+
+    tag_scores: Counter = Counter()
+    for _, row in df_hoy.iterrows():
+        score = max(_selected_score_value(row), 1.0)
+        for tag in _parse_tags(row.get("Tags")):
+            tag_scores[tag] += score
+    if tag_scores:
+        with st.container(border=True):
+            st.markdown("**Hot topics**")
+            for tag, value in tag_scores.most_common(5):
+                st.markdown(f"**{tag}** · {value:.0f}")
 
     # --- Distribución por área ---
     with st.container(border=True):
@@ -1037,6 +1158,7 @@ def _render_tab_hoy(filtros: dict) -> None:
 
     # Layout 2 columnas: Feed (75%) + Señales (25%)
     df_hoy = _obtener_noticias_hoy()
+    _render_selected_section(df_hoy, filtros)
     col_feed, col_signals = st.columns([3, 1], gap="large")
 
     with col_feed:

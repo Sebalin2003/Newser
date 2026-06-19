@@ -20,6 +20,7 @@ import logging
 import math
 import os
 import re
+import hashlib
 import string
 from collections import Counter
 from datetime import datetime, timedelta, timezone
@@ -40,6 +41,7 @@ except ImportError:
 
 from .database import Cluster, MacroResumen, Noticia, Tendencia, get_session
 from .global_news import GlobalNewsItem, fetch_global_news
+from .scoring import SCORE_VERSION, score_recent_items
 
 # ---------------------------------------------------------------------------
 # Dependencias opcionales (degradación elegante si no están instaladas)
@@ -605,17 +607,40 @@ def _serializar_global_item(item: GlobalNewsItem) -> dict[str, Any]:
     }
 
 
-def _score_local_signal(item: dict[str, Any]) -> int:
-    for key in ("score", "Score", "stars", "points", "ranking"):
+def _score_local_signal(item: dict[str, Any]) -> float:
+    for key in ("selected_score", "Selected Score", "score", "Score", "stars", "points", "ranking"):
         value = item.get(key)
         if value is None:
             continue
         try:
-            numeric = int(value)
+            numeric = float(value)
         except (TypeError, ValueError):
             continue
         return -numeric if key == "ranking" else numeric
-    return 0
+    return 0.0
+
+
+def _payload_signature(payload: dict[str, Any]) -> str:
+    records = payload.get("source_records", [])
+    keys = [
+        f"{record.get('url', '')}|{record.get('score', '')}|{record.get('score_version', '')}"
+        for record in records
+        if record.get("url")
+    ]
+    return hashlib.sha256("\n".join(sorted(keys)).encode("utf-8")).hexdigest()
+
+
+def _macro_cache_matches(existing: MacroResumen, signature: str) -> bool:
+    if getattr(existing, "modelo", None) != GEMINI_MODEL or not getattr(existing, "brief_json", None):
+        return False
+    try:
+        brief = json.loads(existing.brief_json)
+    except (TypeError, json.JSONDecodeError):
+        return False
+    return (
+        brief.get("source_signature") == signature
+        and brief.get("score_version") == SCORE_VERSION
+    )
 
 
 def build_hybrid_brief_payload(
@@ -624,31 +649,50 @@ def build_hybrid_brief_payload(
     fecha,
 ) -> dict[str, Any]:
     """Construye un paquete compacto y verificable para el brief hibrido."""
+    max_total = 15
     clean_global = [item for item in global_items if item is not None]
     clean_global.sort(key=lambda item: item.score, reverse=True)
-    global_payload = [_serializar_global_item(item) for item in clean_global[:10]]
+    global_payload = [_serializar_global_item(item) for item in clean_global[:8]]
+    seen_urls = {item["url"].rstrip("/").lower() for item in global_payload if item.get("url")}
 
-    clean_local = sorted(local_items, key=_score_local_signal, reverse=True)[:15]
+    clean_local = sorted(local_items, key=_score_local_signal, reverse=True)
     local_payload = []
     for item in clean_local:
+        if len(global_payload) + len(local_payload) >= max_total:
+            break
+        url = str(item.get("url") or item.get("URL") or "")
+        url_key = url.rstrip("/").lower()
+        if url_key and url_key in seen_urls:
+            continue
+        seen_urls.add(url_key)
         local_payload.append({
             "title": str(item.get("title") or item.get("titulo") or item.get("Título") or "")[:240],
             "source": str(item.get("source") or item.get("fuente") or item.get("Fuente") or ""),
-            "url": str(item.get("url") or item.get("URL") or ""),
+            "url": url,
             "summary": str(item.get("summary") or item.get("resumen") or item.get("Resumen IA") or "")[:500],
             "area": str(item.get("area") or item.get("Área") or ""),
-            "score": _score_local_signal(item),
+            "score": round(_score_local_signal(item), 1),
+            "tags": item.get("tags") or item.get("Tags") or [],
+            "selection_reason": str(item.get("selection_reason") or item.get("Motivo seleccion") or ""),
+            "score_version": str(item.get("score_version") or SCORE_VERSION),
         })
+
+    source_records = []
+    for item in global_payload + local_payload:
+        if item.get("url"):
+            source_records.append({
+                "name": item["source"],
+                "url": item["url"],
+                "title": item["title"],
+                "score": item.get("score", 0),
+                "score_version": item.get("score_version", SCORE_VERSION),
+            })
 
     return {
         "date": fecha.isoformat() if hasattr(fecha, "isoformat") else str(fecha),
         "global_news": global_payload,
         "developer_signals": local_payload,
-        "source_records": [
-            {"name": item["source"], "url": item["url"], "title": item["title"]}
-            for item in global_payload
-            if item.get("url")
-        ],
+        "source_records": source_records,
     }
 
 
@@ -760,6 +804,7 @@ def generar_macro_resumen_dia(config: dict, progress_callback: Callable[[str], N
     # Idempotencia
     with get_session() as session:
         existente = session.query(MacroResumen).filter(MacroResumen.fecha == hoy).first()
+        existing_ready = None
         if existente:
             if existente.modelo in {"fallback", "gemini_error"}:
                 logger.info("MacroResumen para %s es %s. Se regenerará.", hoy, existente.modelo)
@@ -767,14 +812,14 @@ def generar_macro_resumen_dia(config: dict, progress_callback: Callable[[str], N
                 session.commit()
             else:
                 logger.info("MacroResumen para %s ya existe. Se omite generación.", hoy)
-                return {"macro_resumen_generado": False, "texto": existente.texto, "uso_api": False}
+                existing_ready = existente
 
         # Leer noticias directamente — NO clusters
         cutoff = datetime.combine(hoy, datetime.min.time())
         noticias = (
             session.query(Noticia)
             .filter(Noticia.fecha_ingesta >= cutoff)
-            .order_by(Noticia.fecha_ingesta.desc())
+            .order_by(Noticia.selected_score.desc(), Noticia.fecha_ingesta.desc())
             .limit(50)  # top 50 más relevantes del día
             .all()
         )
@@ -807,10 +852,18 @@ def generar_macro_resumen_dia(config: dict, progress_callback: Callable[[str], N
                 "url": n.url,
                 "summary": n.resumen_ia if n.resumen_ia != "Resumen no disponible" else n.descripcion_original,
                 "area": n.area_matcheada,
-                "score": n.score or n.ranking or 0,
+                "selected_score": getattr(n, "selected_score", None),
+                "score": getattr(n, "selected_score", None) or n.score or n.ranking or 0,
+                "tags": json.loads(n.tags_json or "[]") if getattr(n, "tags_json", None) else [],
+                "selection_reason": getattr(n, "selection_reason", None) or "",
+                "score_version": getattr(n, "score_version", None) or SCORE_VERSION,
             })
 
         payload = build_hybrid_brief_payload(global_items, local_signals, hoy)
+        source_signature = _payload_signature(payload)
+        if existing_ready and _macro_cache_matches(existing_ready, source_signature):
+            logger.info("MacroResumen para %s ya existe con la misma seleccion. Se omite Gemini.", hoy)
+            return {"macro_resumen_generado": False, "texto": existing_ready.texto, "uso_api": False}
         payload_json = json.dumps(payload, ensure_ascii=False, indent=2)
 
         prompt = f"""Sos un editor senior de noticias IT.
@@ -852,6 +905,8 @@ Reglas:
         raw = _llamar_gemini(prompt, progress_callback)
         brief_data = _parsear_brief_json(raw or "", payload.get("source_records", []))
         if brief_data:
+            brief_data["source_signature"] = source_signature
+            brief_data["score_version"] = SCORE_VERSION
             texto = _brief_json_to_text(brief_data)
             brief_json = json.dumps(brief_data, ensure_ascii=False)
             modelo_usado = GEMINI_MODEL
@@ -1113,6 +1168,14 @@ def ejecutar_procesamiento(progress_callback: Callable[[str], None] = None) -> d
     # Etapa 2: Clustering diario
     metricas_clustering = clustering_diario(config, progress_callback=progress_callback)
 
+    if progress_callback:
+        progress_callback("Calculando score de seleccion sin usar Gemini...")
+    try:
+        noticias_scored = score_recent_items(config, hours=24)
+    except Exception as exc:
+        logger.warning("Scoring de seleccion omitido por error: %s", exc)
+        noticias_scored = 0
+
     # Etapa 3: Enriquecimiento IA individual
     if gemini_disponible and max_ia > 0:
         noticias_enriquecidas = enriquecer_con_ia(config, max_noticias=max_ia, progress_callback=progress_callback)
@@ -1135,6 +1198,7 @@ def ejecutar_procesamiento(progress_callback: Callable[[str], None] = None) -> d
         "noticias_enriquecidas": noticias_enriquecidas,
         "clusters_generados":    metricas_clustering.get("clusters_generados", 0),
         "noticias_agrupadas":    metricas_clustering.get("noticias_agrupadas", 0),
+        "noticias_scored":       noticias_scored,
         "macro_resumen_generado": resultado_macro.get("macro_resumen_generado", False),
         "uso_api_macro":         resultado_macro.get("uso_api", False),
     }
