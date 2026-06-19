@@ -754,15 +754,15 @@ def generar_macro_resumen_dia(config: dict, progress_callback: Callable[[str], N
     if progress_callback:
         progress_callback("Evaluando generación de MacroResumen del día...")
 
-    hoy = datetime.now(timezone.utc).date()
+    hoy = datetime.now().date()
     FALLBACK_BAJO_VOLUMEN = "Bajo volumen de actualizaciones en el mercado hoy."
 
     # Idempotencia
     with get_session() as session:
         existente = session.query(MacroResumen).filter(MacroResumen.fecha == hoy).first()
         if existente:
-            if existente.modelo == "fallback":
-                logger.info("MacroResumen para %s es fallback. Se regenerará.", hoy)
+            if existente.modelo in {"fallback", "gemini_error"}:
+                logger.info("MacroResumen para %s es %s. Se regenerará.", hoy, existente.modelo)
                 session.delete(existente)
                 session.commit()
             else:

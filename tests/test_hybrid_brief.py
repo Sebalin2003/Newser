@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import unittest
-from datetime import date
+from datetime import date, datetime as real_datetime, timezone
 from unittest.mock import patch
 
 
@@ -134,6 +134,79 @@ class TestHybridPayload(unittest.TestCase):
         self.assertIn("Gemini", kwargs["texto"])
         self.assertNotIn("Bajo volumen", kwargs["texto"])
         self.assertFalse(result["uso_api"])
+
+    def test_gemini_error_macro_summary_is_retryable(self) -> None:
+        import src.processor as processor
+
+        existing = type("ExistingMacro", (), {"modelo": "gemini_error", "texto": "old quota error"})()
+        article = type("Article", (), {
+            "titulo": "Important IT story",
+            "fuente": "Reuters",
+            "url": "https://www.reuters.com/example",
+            "resumen_ia": "Resumen no disponible",
+            "descripcion_original": "A real story exists.",
+            "area_matcheada": "ciberseguridad",
+            "score": 100,
+            "ranking": None,
+            "fecha_ingesta": None,
+        })()
+
+        with patch.object(processor, "fetch_global_news", return_value=[]), \
+            patch.object(processor, "_llamar_gemini", return_value='{"intro":"ok","items":[],"trend_judgment":"ok"}'), \
+            patch.object(processor, "_persistir_macro_resumen") as persist, \
+            patch.object(processor, "get_session") as get_session:
+            session = get_session.return_value.__enter__.return_value
+            query = session.query.return_value
+            query.filter.return_value.first.return_value = existing
+            query.filter.return_value.order_by.return_value.limit.return_value.all.return_value = [article, article, article]
+
+            result = processor.generar_macro_resumen_dia({})
+
+        session.delete.assert_called_once_with(existing)
+        persist.assert_called_once()
+        self.assertTrue(result["uso_api"])
+
+    def test_macro_summary_uses_local_date_not_utc_date(self) -> None:
+        import src.processor as processor
+
+        class FakeDateTime:
+            min = real_datetime.min
+
+            @classmethod
+            def now(cls, tz=None):
+                if tz is timezone.utc:
+                    return real_datetime(2026, 6, 19, 2, 30)
+                return real_datetime(2026, 6, 18, 23, 30)
+
+            @classmethod
+            def combine(cls, day, value):
+                return real_datetime.combine(day, value)
+
+        article = type("Article", (), {
+            "titulo": "Important IT story",
+            "fuente": "Reuters",
+            "url": "https://www.reuters.com/example",
+            "resumen_ia": "Resumen no disponible",
+            "descripcion_original": "A real story exists.",
+            "area_matcheada": "ciberseguridad",
+            "score": 100,
+            "ranking": None,
+            "fecha_ingesta": None,
+        })()
+
+        with patch.object(processor, "datetime", FakeDateTime), \
+            patch.object(processor, "fetch_global_news", return_value=[]), \
+            patch.object(processor, "_llamar_gemini", return_value='{"intro":"ok","items":[],"trend_judgment":"ok"}'), \
+            patch.object(processor, "_persistir_macro_resumen") as persist, \
+            patch.object(processor, "get_session") as get_session:
+            session = get_session.return_value.__enter__.return_value
+            query = session.query.return_value
+            query.filter.return_value.first.return_value = None
+            query.filter.return_value.order_by.return_value.limit.return_value.all.return_value = [article, article, article]
+
+            processor.generar_macro_resumen_dia({})
+
+        self.assertEqual(persist.call_args.kwargs["fecha"], date(2026, 6, 18))
 
     def test_processing_skips_individual_enrichment_when_gemini_check_fails(self) -> None:
         import src.processor as processor
