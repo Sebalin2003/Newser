@@ -283,6 +283,20 @@ class TestHybridPayload(unittest.TestCase):
 
 
 class TestGlobalNewsIngestion(unittest.TestCase):
+    def test_hacker_news_algolia_failure_reports_specific_worker_name(self) -> None:
+        import src.ingestor as ingestor
+
+        with patch.object(ingestor.requests, "get", side_effect=Exception("network down")):
+            _, metrics = ingestor._worker_hn_algolia(
+                {"nombre": "Hacker News"},
+                {"timeout_request": 1},
+                {},
+                dias_ventana=7,
+            )
+
+        self.assertEqual(metrics["fuentes_fallidas"], 1)
+        self.assertEqual(metrics["nombres_fallidas"], ["Hacker News Algolia 7d"])
+
     def test_global_items_convert_to_local_noticias_with_source_names(self) -> None:
         from src.global_news import normalize_global_item
         from src.ingestor import _noticias_desde_global_items

@@ -1022,11 +1022,6 @@ def _render_tab_hoy(filtros: dict) -> None:
     Pestaña Operativa — Command Center layout:
     KPIs → MacroResumen colapsable → [Feed agrupado | Panel señales]
     """
-    metrics = st.session_state.get("etl_metrics", {})
-    fallidas = metrics.get("nombres_fallidas", []) if metrics else []
-    if fallidas:
-        st.warning(f"⚠️ **Atención:** Fallos de conexión en: {', '.join(fallidas)}")
-
     st.markdown("### Monitoreo de hoy")
     st.caption("Señales recientes para detectar qué está ganando tracción en la comunidad técnica.")
 

@@ -398,7 +398,7 @@ def _worker_hn(
     except Exception as exc:
         logger.error("Error en worker HN Firebase: %s", exc)
         metricas["fuentes_fallidas"] += 1
-        metricas["nombres_fallidas"].append(nombre)
+        metricas["nombres_fallidas"].append(metricas["nombre"])
 
     return noticias, metricas
 
@@ -484,7 +484,7 @@ def _worker_hn_algolia(
     except Exception as exc:
         logger.error("Error en worker HN Algolia: %s", exc)
         metricas["fuentes_fallidas"] += 1
-        metricas["nombres_fallidas"].append(nombre)
+        metricas["nombres_fallidas"].append(metricas["nombre"])
 
     return noticias, metricas
 
