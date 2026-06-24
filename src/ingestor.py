@@ -630,16 +630,10 @@ def ejecutar_ingesta(progress_callback: Callable[[str], None] | None = None) -> 
 
         if tipo == "github_api":
             dias_hoy = app_cfg.get("github_trending_dias_hoy", 1)
-            dias_sem = app_cfg.get("github_trending_dias_semanal", 7)
             tareas.append((
                 f"GitHub {dias_hoy}d (hoy)",
                 _worker_github,
                 (fuente_cfg, app_cfg, areas_interes, dias_hoy),
-            ))
-            tareas.append((
-                f"GitHub {dias_sem}d (semana)",
-                _worker_github,
-                (fuente_cfg, app_cfg, areas_interes, dias_sem),
             ))
 
         elif tipo == "hn_api":
@@ -714,7 +708,22 @@ def ejecutar_ingesta(progress_callback: Callable[[str], None] | None = None) -> 
                 else:
                     if noticia.discussion_url and not existing.discussion_url:
                         existing.discussion_url = noticia.discussion_url
-                    if existing.fecha_publicacion is None and noticia.fecha_publicacion is not None:
+                    if noticia.fuente == "GitHub Trending":
+                        existing.titulo = noticia.titulo
+                        existing.url = noticia.url
+                        existing.descripcion_original = noticia.descripcion_original
+                        existing.area_matcheada = noticia.area_matcheada
+                        existing.fecha_ingesta = noticia.fecha_ingesta
+                        existing.fecha_publicacion = None
+                        existing.ranking = noticia.ranking
+                        existing.score = noticia.score
+                        existing.selected_score = None
+                        existing.score_components_json = None
+                        existing.tags_json = None
+                        existing.selection_reason = None
+                        existing.scored_at = None
+                        existing.score_version = None
+                    elif existing.fecha_publicacion is None and noticia.fecha_publicacion is not None:
                         existing.fecha_publicacion = noticia.fecha_publicacion
                     metricas["duplicadas_omitidas"] += 1
             session.commit()

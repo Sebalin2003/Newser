@@ -21,9 +21,10 @@ import os
 import re as _re
 import threading
 from collections import Counter
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import plotly.express as px
@@ -32,9 +33,9 @@ import streamlit as st
 import yaml
 from dotenv import load_dotenv
 from sqlalchemy import or_
-from streamlit.runtime.scriptrunner import add_script_run_ctx
 from streamlit_autorefresh import st_autorefresh
 from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 import atexit
 
@@ -47,7 +48,7 @@ from src.database import (
 )
 from src.ingestor import ejecutar_ingesta
 from src.processor import ejecutar_procesamiento, generar_resumen_individual
-from src.scoring import SCORE_VERSION, calculate_item_score
+from src.scoring import SCORE_VERSION, calculate_item_score, score_recent_items
 from src.search_component import render_corpus_search
 
 load_dotenv()
@@ -56,6 +57,7 @@ load_dotenv()
 # Configuración de rutas
 # ---------------------------------------------------------------------------
 CONFIG_PATH = Path(__file__).parent / "config.yaml"
+LOGO_PATH = Path(__file__).parent / "assets" / "newser-lockup.png"
 
 # ---------------------------------------------------------------------------
 # Catálogos (extensibles sin tocar lógica)
@@ -80,7 +82,9 @@ AREAS_CATALOGO: dict[str, str] = {
     "Hardware & Semiconductores":      "semiconductores",
 }
 
-PIPELINE_INTERVALO_HORAS: int = 6  # cada cuántas horas se ejecuta automáticamente
+FEED_REFRESH_INTERVAL = timedelta(minutes=30)
+BRIEF_TIMEZONE = ZoneInfo("America/Argentina/Buenos_Aires")
+FILTER_WINDOW_DAYS = 7
 
 # Mapping área → color badge nativo de Streamlit
 AREA_BADGE_COLOR: dict[str, str] = {
@@ -387,51 +391,113 @@ def _obtener_stats_globales() -> dict:
 
 
 # ===========================================================================
-# Pipeline (background thread)
+# Automatic feed refresh
 # ===========================================================================
 
-def _run_etl_thread(session_state):
-    """Ejecuta el pipeline en background interactuando con el session_state."""
-    def update_progress(msg: str):
-        session_state.etl_logs.append(msg)
+_feed_refresh_lock = threading.Lock()
 
+
+def _is_feed_stale(latest_ingested_at: datetime | None, now: datetime | None = None) -> bool:
+    if latest_ingested_at is None:
+        return True
+    if latest_ingested_at.tzinfo is None:
+        latest_ingested_at = latest_ingested_at.replace(tzinfo=timezone.utc)
+    now = now or datetime.now(timezone.utc)
+    return now - latest_ingested_at >= FEED_REFRESH_INTERVAL
+
+
+def _latest_ingested_at() -> datetime | None:
+    with get_session() as session:
+        return (
+            session.query(Noticia.fecha_ingesta)
+            .order_by(Noticia.fecha_ingesta.desc())
+            .limit(1)
+            .scalar()
+        )
+
+
+def _has_today_feed() -> bool:
+    latest_ingested_at = _latest_ingested_at()
+    if latest_ingested_at is None:
+        return False
+    if latest_ingested_at.tzinfo is None:
+        latest_ingested_at = latest_ingested_at.replace(tzinfo=timezone.utc)
+    return latest_ingested_at >= datetime.now(timezone.utc) - timedelta(hours=24)
+
+
+def _clear_data_caches() -> None:
+    _buscar_corpus.clear()
+    _sugerir_corpus.clear()
+    _obtener_macro_resumen_hoy.clear()
+    _obtener_stats_globales.clear()
+    st.cache_data.clear()
+
+
+def _refresh_feed_data() -> None:
+    ejecutar_ingesta()
+    score_recent_items(_cargar_config(), hours=24)
+    _clear_data_caches()
+
+
+def _run_entry_feed_refresh() -> None:
     try:
-        session_state.etl_logs.append("**--- INGESTA ---**")
-        m_ingesta = ejecutar_ingesta(progress_callback=update_progress)
-
-        session_state.etl_logs.append("**--- ENRIQUECIMIENTO IA ---**")
-        m_proc = ejecutar_procesamiento(progress_callback=update_progress)
-
-        session_state.etl_metrics = {**m_ingesta, **m_proc}
-        session_state.etl_logs.append("✅ Pipeline Analítico finalizado")
+        _refresh_feed_data()
     except Exception as exc:
-        session_state.etl_logs.append(f"🚨 Error durante el pipeline: {exc}")
+        print(f"[Feed refresh] Error: {exc}")
     finally:
-        session_state.etl_is_running = False
+        _feed_refresh_lock.release()
+
+
+def _ensure_feed_refresh() -> bool:
+    if not _is_feed_stale(_latest_ingested_at()):
+        return False
+    if not _feed_refresh_lock.acquire(blocking=False):
+        return True
+    try:
+        thread = threading.Thread(target=_run_entry_feed_refresh, daemon=True)
+        thread.start()
+    except Exception:
+        _feed_refresh_lock.release()
+        raise
+    return True
 
 
 # ===========================================================================
 # Sidebar — Command Center Edition
 # ===========================================================================
 
-def _render_sidebar(config: dict) -> tuple[bool, dict]:
+def _filter_date_bounds(today: date | None = None) -> tuple[date, date]:
+    end = today or datetime.now(BRIEF_TIMEZONE).date()
+    return end - timedelta(days=FILTER_WINDOW_DAYS - 1), end
+
+
+def _parse_filter_date(value: Any, today: date | None = None) -> date:
+    minimum, maximum = _filter_date_bounds(today)
+    try:
+        parsed = date.fromisoformat(str(value))
+    except (TypeError, ValueError):
+        return maximum
+    return parsed if minimum <= parsed <= maximum else maximum
+
+
+def _render_sidebar(config: dict) -> dict:
     """
     Sidebar de control rediseñada:
     - Filtros de negocio primero
     - Estado del sistema (Gemini detection autónoma)
-    - Config avanzada colapsable
-    - CTA de pipeline
+    - Estado de actualización automática
     """
     with st.sidebar:
         version = config.get("app", {}).get("version", "2.0.0")
 
-        # --- Header ---
-        st.markdown("### Newser")
-        st.caption(f"Developer pulse · v{version}")
+        if LOGO_PATH.exists():
+            st.image(str(LOGO_PATH), width=150)
+        else:
+            st.markdown("### Newser")
+        st.caption(f"v{version}")
         st.divider()
 
-        # --- Filtros ---
-        st.markdown("**Signal scope**")
+        st.markdown("**Filtros**")
 
         def on_fuentes_change():
             st.query_params["fuentes"] = st.session_state.fuentes_multi
@@ -452,7 +518,6 @@ def _render_sidebar(config: dict) -> tuple[bool, dict]:
             st.query_params["areas"] = st.session_state.areas_multi
             st.session_state["areas_sel"] = st.session_state.areas_multi
 
-        st.markdown("**Áreas de interés**")
         areas_sel = st.multiselect(
             "Áreas",
             options=list(AREAS_CATALOGO.keys()),
@@ -463,6 +528,41 @@ def _render_sidebar(config: dict) -> tuple[bool, dict]:
         )
         if areas_sel:
             st.caption(f"{len(areas_sel)} de {len(AREAS_CATALOGO)} seleccionadas")
+
+        date_min, date_max = _filter_date_bounds()
+
+        def on_fecha_change():
+            selected = st.session_state.fecha_filtro
+            st.query_params["fecha"] = selected.isoformat()
+            st.session_state["fecha_sel"] = selected
+
+        fecha_sel = st.date_input(
+            "Fecha",
+            value=st.session_state.get("fecha_sel", date_max),
+            min_value=date_min,
+            max_value=date_max,
+            key="fecha_filtro",
+            on_change=on_fecha_change,
+        )
+
+        def on_orden_change():
+            selected = st.session_state.orden_filtro
+            st.query_params["orden"] = selected
+            st.session_state["orden_sel"] = selected
+
+        orden_sel = st.segmented_control(
+            "Ordenar por",
+            options=["Puntaje", "Más reciente"],
+            default=st.session_state.get("orden_sel", "Puntaje"),
+            selection_mode="single",
+            key="orden_filtro",
+            on_change=on_orden_change,
+        )
+
+        if st.query_params.get("fecha") != fecha_sel.isoformat():
+            st.query_params["fecha"] = fecha_sel.isoformat()
+        if orden_sel and st.query_params.get("orden") != orden_sel:
+            st.query_params["orden"] = orden_sel
 
         # --- Estado del sistema ---
         st.divider()
@@ -477,46 +577,25 @@ def _render_sidebar(config: dict) -> tuple[bool, dict]:
         else:
             st.caption("Sin análisis hoy")
 
-        # Próxima ejecución automática
+        # Estado de actualización automática
         scheduler = st.session_state.get("scheduler")
         if scheduler:
-            job = scheduler.get_job("pipeline_auto")
-            if job and job.next_run_time:
-                proxima = job.next_run_time.strftime("%H:%M UTC")
-                st.caption(f"Próximo automático: {proxima}")
-            elif not tiene_descripcion:
+            brief_job = scheduler.get_job("daily_brief")
+            if _feed_refresh_lock.locked():
+                st.caption("Actualizando fuentes...")
+            elif brief_job and brief_job.next_run_time:
+                proxima = brief_job.next_run_time.astimezone(BRIEF_TIMEZONE).strftime("%H:%M ART")
+                st.caption(f"Próximo brief: {proxima}")
+            else:
                 st.caption("Scheduler no activo")
-
-        # --- ETL Controls ---
-        st.divider()
-
-        if "etl_is_running" not in st.session_state:
-            st.session_state.etl_is_running = False
-            st.session_state.etl_logs = []
-            st.session_state.etl_metrics = None
-            st.session_state.etl_done_notified = False
-
-        clicked = False
-
-        if st.session_state.etl_is_running:
-            st.info("⏳ Ejecutando Pipeline Analítico...")
-            with st.container(height=200):
-                for log in st.session_state.etl_logs[-20:]:
-                    st.caption(log)
-            st_autorefresh(interval=1500, key="etl_refresh")
-        else:
-            clicked = st.button(
-                "Analizar período",
-                type="primary",
-                use_container_width=True,
-                help="Ejecuta ingesta, clustering, tendencias y resúmenes IA.",
-            )
 
     filtros: dict[str, Any] = {
         "fuentes":    fuentes_sel,
         "areas_keys": [AREAS_CATALOGO[a] for a in areas_sel],
+        "fecha":      fecha_sel,
+        "orden":      orden_sel or "Puntaje",
     }
-    return clicked, filtros
+    return filtros
 
 
 # ===========================================================================
@@ -611,7 +690,7 @@ def _render_macro_resumen_card() -> None:
             meta_3.metric("Modelo", macro["modelo"])
     else:
         st.warning(
-            "El brief del día todavía no está disponible. Ejecutá **Analizar período** para generarlo.",
+            "El brief del día todavía no está disponible. Se generará automáticamente a las 08:00 ART.",
             icon="⏳",
         )
 
@@ -637,8 +716,8 @@ def _extraer_metrica(titulo: str, fuente: str) -> int:
 
 
 def _obtener_noticias_hoy() -> pd.DataFrame:
-    """Carga noticias de las últimas 24h desde DB (sin dependencia de Cluster)."""
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+    """Carga la ventana local de siete días para los filtros del feed."""
+    cutoff = datetime.now(timezone.utc) - timedelta(days=FILTER_WINDOW_DAYS)
     config = _cargar_config()
     registros: list[dict] = []
     with get_session() as session:
@@ -750,6 +829,59 @@ def _feed_time_display(row: dict | pd.Series) -> tuple[str, str] | None:
         value = row.get("Publicada")
     timestamp = _format_publication_time(value)
     return (label, timestamp) if timestamp else None
+
+
+def _effective_feed_timestamp(row: dict | pd.Series) -> pd.Timestamp:
+    """Timestamp usado para filtrar y ordenar según la semántica de la fuente."""
+    source = row.get("Fuente")
+    value = row.get("Ingestada") if source == "GitHub Trending" else row.get("Publicada")
+    if value is None or pd.isna(value):
+        value = row.get("Ingestada")
+    timestamp = pd.Timestamp(value)
+    if pd.isna(timestamp):
+        return pd.NaT
+    return timestamp.tz_localize("UTC") if timestamp.tzinfo is None else timestamp.tz_convert("UTC")
+
+
+def _filter_and_sort_feed(df: pd.DataFrame, filtros: dict[str, Any]) -> pd.DataFrame:
+    """Aplica filtros comunes al feed, señales y resultados de búsqueda."""
+    if df.empty:
+        return df.copy()
+
+    filtered = df.copy()
+    if filtros.get("fuentes"):
+        filtered = filtered[filtered["Fuente"].isin(filtros["fuentes"])]
+    if filtros.get("areas_keys"):
+        filtered = filtered[filtered["Área"].isin(filtros["areas_keys"])]
+
+    if filtered.empty:
+        return filtered
+
+    filtered["_effective_time"] = pd.to_datetime(
+        filtered.apply(_effective_feed_timestamp, axis=1),
+        errors="coerce",
+        utc=True,
+    )
+    selected_date = filtros.get("fecha")
+    if isinstance(selected_date, date):
+        local_dates = filtered["_effective_time"].dt.tz_convert(BRIEF_TIMEZONE).dt.date
+        filtered = filtered[local_dates == selected_date]
+
+    if filtered.empty:
+        return filtered.drop(columns=["_effective_time"], errors="ignore")
+
+    if filtros.get("orden") == "Más reciente":
+        sort_columns = ["_effective_time", "Selected Score"]
+        ascending = [False, False]
+    else:
+        sort_columns = ["Selected Score", "_effective_time"]
+        ascending = [False, False]
+    return filtered.sort_values(
+        sort_columns,
+        ascending=ascending,
+        na_position="last",
+        kind="stable",
+    ).drop(columns=["_effective_time"])
 
 
 def _render_feed_card(row: dict) -> None:
@@ -876,28 +1008,19 @@ def _render_feed_agrupado(
     Feed de noticias agrupado por Área temática.
     Muestra máximo 10 tarjetas por área con expander 'Ver más'.
     """
-    # Aplicar filtros
-    if not df_hoy.empty:
-        if filtros.get("fuentes"):
-            df_hoy = df_hoy[df_hoy["Fuente"].isin(filtros["fuentes"])]
-        if filtros.get("areas_keys"):
-            df_hoy = df_hoy[df_hoy["Área"].isin(filtros["areas_keys"])]
+    df_hoy = _filter_and_sort_feed(df_hoy, filtros)
 
     if df_hoy.empty:
         message = (
             "Sin resultados en el corpus para esta búsqueda."
             if search_active
-            else "Sin artículos para los filtros activos. Ejecutá 'Analizar Período'."
+            else "Sin publicaciones para los filtros activos."
         )
         st.info(message, icon="ℹ️")
         return
 
-    df_sorted = df_hoy.sort_values(
-        ["Selected Score", "Ingestada"],
-        ascending=[False, False],
-        na_position="last",
-        kind="stable",
-    )
+    df_sorted = df_hoy
+    order_label = "Puntaje" if filtros.get("orden") != "Más reciente" else "Más reciente"
 
     # Header
     gh_count = int((df_hoy["Fuente"] == "GitHub Trending").sum())
@@ -905,12 +1028,12 @@ def _render_feed_agrupado(
     global_count = int(df_hoy["Fuente"].isin(["Reuters", "GitHub Blog", "OpenAI Blog"]).sum())
     if search_active:
         st.subheader(f"Resultados de búsqueda · {len(df_sorted)} publicaciones")
-        st.caption("Resultados ordenados por Score.")
+        st.caption(f"Resultados ordenados por {order_label.lower()}.")
     else:
-        st.subheader(f"Feed de señales · {len(df_sorted)} publicaciones")
+        st.subheader(f"Tendencias · {len(df_sorted)} publicaciones")
         st.caption(
             f"**{gh_count}** repositorios GitHub · **{hn_count}** debates HN. "
-            "Todas las publicaciones se ordenan por Score."
+            f"Todas las publicaciones se ordenan por {order_label.lower()}."
         )
         if global_count:
             st.caption(f"**{global_count}** noticias IT globales desde Reuters, GitHub Blog y OpenAI Blog.")
@@ -1008,22 +1131,6 @@ def _render_panel_signals(df_hoy: pd.DataFrame) -> None:
 
 
 # ===========================================================================
-# Resultados del pipeline
-# ===========================================================================
-
-def _render_pipeline_result(metrics: dict) -> None:
-    """Muestra las métricas del último pipeline ejecutado."""
-    if not metrics:
-        return
-    col1, col2, col3 = st.columns(3)
-    col1.metric("✅ Nuevas persistidas",  metrics.get("nuevas_persistidas", 0))
-    col2.metric("♻️ Duplicadas omitidas", metrics.get("duplicadas_omitidas", 0))
-    col3.metric("⚠️ Fuentes fallidas",    metrics.get("fuentes_fallidas", 0))
-    if metrics.get("nombres_fallidas"):
-        st.caption(f"Fuentes con error: {', '.join(metrics['nombres_fallidas'])}")
-
-
-# ===========================================================================
 # Overview KPIs (con fila de contexto)
 # ===========================================================================
 
@@ -1104,13 +1211,7 @@ def _render_tab_hoy(filtros: dict, df_feed: pd.DataFrame | None = None) -> None:
         )
 
     with col_signals:
-        # Aplicar filtros al df para las señales
-        df_signals = df_visible.copy()
-        if not df_signals.empty:
-            if filtros.get("fuentes"):
-                df_signals = df_signals[df_signals["Fuente"].isin(filtros["fuentes"])]
-            if filtros.get("areas_keys"):
-                df_signals = df_signals[df_signals["Área"].isin(filtros["areas_keys"])]
+        df_signals = _filter_and_sort_feed(df_visible, filtros)
         _render_panel_signals(df_signals)
 
 
@@ -1120,41 +1221,52 @@ def _render_tab_hoy(filtros: dict, df_feed: pd.DataFrame | None = None) -> None:
 
 _scheduler_global: BackgroundScheduler | None = None
 
-def _job_pipeline_automatico() -> None:
-    """Job de APScheduler: ejecuta el pipeline ETL completo en background."""
+def _job_feed_refresh() -> None:
+    """Actualiza el feed sin usar Gemini."""
+    if not _feed_refresh_lock.acquire(blocking=False):
+        return
     try:
-        # Evitar ejecución concurrente con pipeline manual
+        _refresh_feed_data()
+    except Exception as exc:
+        print(f"[Feed refresh] Error: {exc}")
+    finally:
+        _feed_refresh_lock.release()
+
+
+def _job_daily_brief() -> None:
+    """Actualiza las fuentes y genera un único brief diario a las 08:00 ART."""
+    with _feed_refresh_lock:
         try:
-            if st.session_state.get("etl_is_running", False):
-                return
-        except Exception:
-            pass  # st.session_state no disponible en este thread
-        
-        from src.ingestor import ejecutar_ingesta
-        from src.processor import ejecutar_procesamiento
-        
-        ejecutar_ingesta()
+            _refresh_feed_data()
+        except Exception as exc:
+            print(f"[Daily brief refresh] Error: {exc}")
+            return
+    try:
         ejecutar_procesamiento()
-        
-        # Invalidar cachés de Streamlit para que la próxima recarga muestre datos frescos
-        st.cache_data.clear()
-        
-    except Exception as e:
-        # Log silencioso — no propagar para no matar el scheduler
-        print(f"[APScheduler] Error en pipeline automático: {e}")
+        _clear_data_caches()
+    except Exception as exc:
+        print(f"[Daily brief] Error: {exc}")
 
 def _get_or_create_scheduler() -> BackgroundScheduler:
     global _scheduler_global
     if _scheduler_global is None or not _scheduler_global.running:
         _scheduler_global = BackgroundScheduler(
-            job_defaults={"misfire_grace_time": 300},
-            timezone="UTC"
+            job_defaults={"coalesce": True, "max_instances": 1, "misfire_grace_time": 300},
+            timezone=BRIEF_TIMEZONE,
         )
         _scheduler_global.add_job(
-            func=_job_pipeline_automatico,
-            trigger=IntervalTrigger(hours=PIPELINE_INTERVALO_HORAS),
-            id="pipeline_auto",
-            name="Pipeline ETL automático",
+            func=_job_feed_refresh,
+            trigger=IntervalTrigger(minutes=30),
+            id="feed_refresh",
+            name="Actualización automática del feed",
+            replace_existing=True,
+        )
+        _scheduler_global.add_job(
+            func=_job_daily_brief,
+            trigger=CronTrigger(hour=8, minute=0, timezone=BRIEF_TIMEZONE),
+            id="daily_brief",
+            name="Brief diario",
+            misfire_grace_time=3600,
             replace_existing=True,
         )
         _scheduler_global.start()
@@ -1167,7 +1279,7 @@ def _get_or_create_scheduler() -> BackgroundScheduler:
 
 def main() -> None:
     st.set_page_config(
-        page_title="News Trend Analyzer",
+        page_title="Newser",
         page_icon="📡",
         layout="wide",
         initial_sidebar_state="auto",
@@ -1176,17 +1288,19 @@ def main() -> None:
         },
     )
 
-    # ── Scheduler automático (singleton real) ──────────────
-    scheduler = _get_or_create_scheduler()
-    st.session_state["scheduler"] = scheduler
-
     # Bootstrap DB (cacheado — solo corre una vez por sesión)
     _inicializar_db()
     config = _cargar_config()
 
+    # Scheduler automático (singleton real)
+    scheduler = _get_or_create_scheduler()
+    st.session_state["scheduler"] = scheduler
+
     # Session state de filtros (leyendo desde query params si existe)
     qp_fuentes = st.query_params.get_all("fuentes")
     qp_areas = st.query_params.get_all("areas")
+    qp_fecha = st.query_params.get("fecha")
+    qp_orden = st.query_params.get("orden")
 
     if "fuentes_sel" not in st.session_state:
         st.session_state["fuentes_sel"] = qp_fuentes if qp_fuentes else []
@@ -1194,44 +1308,26 @@ def main() -> None:
     if "areas_sel" not in st.session_state:
         st.session_state["areas_sel"] = qp_areas if qp_areas else []
 
+    if "fecha_sel" not in st.session_state:
+        st.session_state["fecha_sel"] = _parse_filter_date(qp_fecha)
+
+    if "orden_sel" not in st.session_state:
+        st.session_state["orden_sel"] = (
+            qp_orden if qp_orden in {"Puntaje", "Más reciente"} else "Puntaje"
+        )
+
     # Sidebar
-    disparar, filtros = _render_sidebar(config)
+    filtros = _render_sidebar(config)
 
     # Header
     st.title("IT News Trend Analyzer")
     busqueda_enviada = _render_corpus_search(filtros)
 
-    # Ejecución del pipeline (background)
-    if disparar and not st.session_state.etl_is_running:
-        st.session_state.etl_is_running = True
-        st.session_state.etl_logs = ["Iniciando ejecución en background..."]
-        st.session_state.etl_metrics = None
-        st.session_state.etl_done_notified = False
-
-        t = threading.Thread(target=_run_etl_thread, args=(st.session_state,))
-        add_script_run_ctx(t)
-        t.start()
-        st.rerun()
-
-    # Resultados post-ejecución
-    if st.session_state.get("etl_metrics") and not st.session_state.get("etl_is_running"):
-        if not st.session_state.get("etl_done_notified"):
-            # Invalidar cachés para forzar recarga de datos frescos
-            _buscar_corpus.clear()
-            _sugerir_corpus.clear()
-            _obtener_macro_resumen_hoy.clear()
-            _obtener_stats_globales.clear()
-            st.session_state.etl_done_notified = True
-
-        if not busqueda_enviada:
-            st.success("Pipeline ETL completado.", icon="✅")
-            st.subheader("Resultado de la ejecución")
-            _render_pipeline_result(st.session_state.etl_metrics)
-            if st.button("Cerrar resultados", key="close_metrics"):
-                st.session_state.etl_metrics = None
-                st.session_state.etl_done_notified = False
-                st.rerun()
-            st.divider()
+    refresh_started = _ensure_feed_refresh()
+    if refresh_started and not _has_today_feed() and not busqueda_enviada:
+        st.info("Actualizando noticias de hoy...", icon="⏳")
+        st_autorefresh(interval=2000, key="feed_refresh")
+        return
 
     if busqueda_enviada:
         df_busqueda = _buscar_corpus(

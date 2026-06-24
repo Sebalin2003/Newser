@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 from contextlib import contextmanager
-from datetime import date, datetime as real_datetime, timezone
+from datetime import date, datetime as real_datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -131,6 +131,69 @@ class TestFeedPublicationTime(unittest.TestCase):
             ("Detectado en tendencias", "19/06/2026 12:34 UTC"),
         )
         self.assertIsNone(app._feed_time_display({"Fuente": "OpenAI Blog", "Publicada": None}))
+
+
+class TestAutomaticFeedRefresh(unittest.TestCase):
+    def test_staleness_uses_thirty_minute_threshold(self) -> None:
+        import app
+
+        now = real_datetime(2026, 6, 24, 12, 0, tzinfo=timezone.utc)
+
+        self.assertTrue(app._is_feed_stale(None, now))
+        self.assertFalse(app._is_feed_stale(now - timedelta(minutes=29), now))
+        self.assertTrue(app._is_feed_stale(now - timedelta(minutes=30), now))
+
+    def test_fresh_feed_does_not_start_background_refresh(self) -> None:
+        import app
+
+        now = real_datetime.now(timezone.utc)
+        with patch.object(app, "_latest_ingested_at", return_value=now), \
+             patch.object(app.threading, "Thread") as thread:
+            self.assertFalse(app._ensure_feed_refresh())
+
+        thread.assert_not_called()
+
+    def test_concurrent_stale_entries_start_one_background_refresh(self) -> None:
+        import app
+
+        if app._feed_refresh_lock.locked():
+            app._feed_refresh_lock.release()
+        stale = real_datetime.now(timezone.utc) - timedelta(hours=1)
+        try:
+            with patch.object(app, "_latest_ingested_at", return_value=stale), \
+                 patch.object(app.threading, "Thread") as thread:
+                self.assertTrue(app._ensure_feed_refresh())
+                self.assertTrue(app._ensure_feed_refresh())
+
+            thread.assert_called_once()
+        finally:
+            if app._feed_refresh_lock.locked():
+                app._feed_refresh_lock.release()
+
+    def test_feed_refresh_does_not_call_gemini_processing(self) -> None:
+        import app
+
+        with patch.object(app, "ejecutar_ingesta") as ingest, \
+             patch.object(app, "score_recent_items") as score, \
+             patch.object(app, "_cargar_config", return_value={}), \
+             patch.object(app, "_clear_data_caches"), \
+             patch.object(app, "ejecutar_procesamiento") as process:
+            app._refresh_feed_data()
+
+        ingest.assert_called_once_with()
+        score.assert_called_once_with({}, hours=24)
+        process.assert_not_called()
+
+    def test_daily_brief_refreshes_feed_before_processing(self) -> None:
+        import app
+
+        calls = []
+        with patch.object(app, "_refresh_feed_data", side_effect=lambda: calls.append("refresh")), \
+             patch.object(app, "ejecutar_procesamiento", side_effect=lambda: calls.append("process")), \
+             patch.object(app, "_clear_data_caches"):
+            app._job_daily_brief()
+
+        self.assertEqual(calls, ["refresh", "process"])
 
 
 class TestGlobalNews(unittest.TestCase):
@@ -564,7 +627,99 @@ class TestCorpusSearch(unittest.TestCase):
         self.assertEqual(self.app._sugerir_corpus("a"), [])
 
 
+class TestSidebarFilters(unittest.TestCase):
+    def setUp(self) -> None:
+        import app
+
+        self.app = app
+
+    def test_date_window_defaults_to_today_and_rejects_outside_range(self) -> None:
+        today = date(2026, 6, 24)
+
+        self.assertEqual(self.app._filter_date_bounds(today), (date(2026, 6, 18), today))
+        self.assertEqual(self.app._parse_filter_date("2026-06-17", today), today)
+        self.assertEqual(self.app._parse_filter_date("invalid", today), today)
+        self.assertEqual(self.app._parse_filter_date("2026-06-20", today), date(2026, 6, 20))
+
+    def test_source_aware_date_filter_uses_publication_or_trending_detection(self) -> None:
+        df = self.app.pd.DataFrame([
+            {
+                "id": "article",
+                "Fuente": "Reuters",
+                "Área": "general",
+                "Publicada": "2026-06-23T22:00:00Z",
+                "Ingestada": "2026-06-24T14:00:00Z",
+                "Selected Score": 90,
+            },
+            {
+                "id": "trending",
+                "Fuente": "GitHub Trending",
+                "Área": "general",
+                "Publicada": None,
+                "Ingestada": "2026-06-24T14:00:00Z",
+                "Selected Score": 80,
+            },
+        ])
+
+        result = self.app._filter_and_sort_feed(df, {"fecha": date(2026, 6, 24)})
+
+        self.assertEqual(result["id"].tolist(), ["trending"])
+
+    def test_sort_mode_uses_score_or_recency_with_stable_tie_breaker(self) -> None:
+        df = self.app.pd.DataFrame([
+            {
+                "id": "high-score",
+                "Fuente": "Reuters",
+                "Área": "general",
+                "Publicada": "2026-06-24T12:00:00Z",
+                "Ingestada": "2026-06-24T12:05:00Z",
+                "Selected Score": 95,
+            },
+            {
+                "id": "recent",
+                "Fuente": "Reuters",
+                "Área": "general",
+                "Publicada": "2026-06-24T15:00:00Z",
+                "Ingestada": "2026-06-24T15:05:00Z",
+                "Selected Score": 80,
+            },
+        ])
+        filters = {"fecha": date(2026, 6, 24)}
+
+        score_sorted = self.app._filter_and_sort_feed(df, filters)
+        recent_sorted = self.app._filter_and_sort_feed(df, {**filters, "orden": "Más reciente"})
+
+        self.assertEqual(score_sorted["id"].tolist(), ["high-score", "recent"])
+        self.assertEqual(recent_sorted["id"].tolist(), ["recent", "high-score"])
+
+
 class TestGlobalNewsIngestion(unittest.TestCase):
+    def test_github_ingestion_schedules_only_daily_trending(self) -> None:
+        import src.ingestor as ingestor
+
+        scheduled_windows = []
+        metrics = {
+            "total_procesadas": 0,
+            "fuentes_fallidas": 0,
+            "nombres_fallidas": [],
+            "no_relevantes": 0,
+        }
+        config = {
+            "app": {"github_trending_dias_hoy": 1, "github_trending_dias_semanal": 7},
+            "areas_interes": {},
+            "fuentes": [{"nombre": "GitHub Trending", "tipo": "github_api"}],
+        }
+
+        def fake_worker(_source, _app, _areas, days):
+            scheduled_windows.append(days)
+            return [], metrics
+
+        with patch.object(ingestor, "cargar_config", return_value=config), \
+             patch.object(ingestor, "_worker_github", side_effect=fake_worker):
+            ingestor.ejecutar_ingesta()
+
+        self.assertEqual(scheduled_windows, [1])
+
     def test_hacker_news_algolia_failure_reports_specific_worker_name(self) -> None:
         import src.ingestor as ingestor
 
@@ -669,8 +824,72 @@ class TestGlobalNewsIngestion(unittest.TestCase):
 
         self.assertEqual(existing.fecha_publicacion, real_datetime(2026, 6, 19, 10, 30))
 
+    def test_duplicate_github_trending_item_refreshes_daily_metadata(self) -> None:
+        import src.ingestor as ingestor
+        from src.database import Noticia
+
+        existing = Noticia(
+            id="github-trending",
+            titulo="[GitHub] old/repository (+1 stars this week)",
+            url="https://github.com/old/repository",
+            fuente="GitHub Trending",
+            descripcion_original="Old description",
+            fecha_ingesta=real_datetime(2026, 6, 23, 12, 0),
+            ranking=18,
+            selected_score=91,
+        )
+        incoming = Noticia(
+            id="github-trending",
+            titulo="[GitHub] calesthio/OpenMontage (+3,703 stars today)",
+            url="https://github.com/calesthio/OpenMontage",
+            fuente="GitHub Trending",
+            descripcion_original="Current description",
+            area_matcheada="inteligencia_artificial",
+            fecha_ingesta=real_datetime(2026, 6, 24, 18, 40),
+            ranking=1,
+        )
+
+        @contextmanager
+        def fake_session():
+            class Session:
+                def get(self, *_args):
+                    return existing
+
+                def commit(self):
+                    return None
+
+            yield Session()
+
+        metrics = {
+            "total_procesadas": 1,
+            "fuentes_fallidas": 0,
+            "nombres_fallidas": [],
+            "no_relevantes": 0,
+        }
+        config = {
+            "app": {"github_trending_dias_hoy": 1},
+            "areas_interes": {},
+            "fuentes": [{"nombre": "GitHub Trending", "tipo": "github_api"}],
+        }
+
+        with patch.object(ingestor, "cargar_config", return_value=config), \
+             patch.object(ingestor, "_worker_github", return_value=([incoming], metrics)), \
+             patch.object(ingestor, "get_session", side_effect=fake_session):
+            ingestor.ejecutar_ingesta()
+
+        self.assertEqual(existing.titulo, incoming.titulo)
+        self.assertEqual(existing.ranking, 1)
+        self.assertEqual(existing.fecha_ingesta, real_datetime(2026, 6, 24, 18, 40))
+        self.assertIsNone(existing.selected_score)
+
 
 class TestBriefUi(unittest.TestCase):
+    def test_manual_analysis_controls_are_absent(self) -> None:
+        source = Path("app.py").read_text(encoding="utf-8")
+
+        self.assertNotIn("Analizar período", source)
+        self.assertNotIn("_render_pipeline_result", source)
+
     def test_hacker_news_comments_use_discussion_url_or_hn_article_url(self) -> None:
         from app import _comment_count, _discussion_url
 
