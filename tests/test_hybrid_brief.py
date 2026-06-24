@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import unittest
+from contextlib import contextmanager
 from datetime import date, datetime as real_datetime, timezone
+from pathlib import Path
 from unittest.mock import patch
 
 
@@ -28,6 +30,7 @@ class TestSchema(unittest.TestCase):
         self.assertIn("score_components_json", columns)
         self.assertIn("tags_json", columns)
         self.assertIn("selection_reason", columns)
+        self.assertIn("discussion_url", columns)
 
 
 class TestArticleScoring(unittest.TestCase):
@@ -95,7 +98,67 @@ class TestArticleScoring(unittest.TestCase):
         )
 
 
+class TestFeedPublicationTime(unittest.TestCase):
+    def test_formats_source_publication_time_in_utc(self) -> None:
+        import app
+
+        published_at = real_datetime(2026, 6, 19, 12, 34, tzinfo=timezone.utc)
+
+        self.assertEqual(
+            app._format_publication_time(published_at),
+            "19/06/2026 12:34 UTC",
+        )
+
+    def test_handles_missing_source_publication_time(self) -> None:
+        import app
+
+        self.assertEqual(
+            app._format_publication_time(None),
+            "",
+        )
+
+    def test_uses_source_specific_time_labels(self) -> None:
+        import app
+
+        timestamp = real_datetime(2026, 6, 19, 12, 34, tzinfo=timezone.utc)
+
+        self.assertEqual(
+            app._feed_time_display({"Fuente": "Reuters", "Publicada": timestamp}),
+            ("Publicado", "19/06/2026 12:34 UTC"),
+        )
+        self.assertEqual(
+            app._feed_time_display({"Fuente": "GitHub Trending", "Ingestada": timestamp}),
+            ("Detectado en tendencias", "19/06/2026 12:34 UTC"),
+        )
+        self.assertIsNone(app._feed_time_display({"Fuente": "OpenAI Blog", "Publicada": None}))
+
+
 class TestGlobalNews(unittest.TestCase):
+    def test_normalize_global_item_preserves_full_published_timestamp(self) -> None:
+        from src.global_news import normalize_global_item
+
+        iso_item = normalize_global_item(
+            title="OpenAI publishes a new model update",
+            source="OpenAI Blog",
+            url="https://openai.com/index/example/",
+            published_at="2026-06-19T12:34:56Z",
+        )
+        rss_item = normalize_global_item(
+            title="GitHub publishes an engineering update",
+            source="GitHub Blog",
+            url="https://github.blog/engineering/example/",
+            published_at="Thu, 19 Jun 2026 09:34:56 -0300",
+        )
+        missing_item = normalize_global_item(
+            title="Reuters technology update",
+            source="Reuters",
+            url="https://www.reuters.com/technology/example/",
+        )
+
+        self.assertEqual(iso_item.published_at, "2026-06-19T12:34:56+00:00")
+        self.assertEqual(rss_item.published_at, "2026-06-19T12:34:56+00:00")
+        self.assertIsNone(missing_item.published_at)
+
     def test_normalize_global_item_rejects_untrusted_source_and_dedupes_urls(self) -> None:
         from src.global_news import dedupe_global_items, normalize_global_item
 
@@ -394,6 +457,113 @@ class TestHybridPayload(unittest.TestCase):
         self.assertTrue(processor._macro_cache_matches(existing, signature))
 
 
+class TestCorpusSearch(unittest.TestCase):
+    def setUp(self) -> None:
+        from sqlalchemy import create_engine
+        from sqlalchemy.orm import sessionmaker
+
+        import app
+        from src.database import Base
+
+        self.app = app
+        self.engine = create_engine("sqlite:///:memory:")
+        Base.metadata.create_all(self.engine)
+        self.session_factory = sessionmaker(bind=self.engine)
+
+        @contextmanager
+        def temporary_session():
+            session = self.session_factory()
+            try:
+                yield session
+                session.commit()
+            except Exception:
+                session.rollback()
+                raise
+            finally:
+                session.close()
+
+        self.session_patch = patch.object(app, "get_session", temporary_session)
+        self.session_patch.start()
+        app._buscar_corpus.clear()
+        app._sugerir_corpus.clear()
+
+    def tearDown(self) -> None:
+        self.app._buscar_corpus.clear()
+        self.app._sugerir_corpus.clear()
+        self.session_patch.stop()
+        self.engine.dispose()
+
+    def _add_article(
+        self,
+        article_id: str,
+        title: str,
+        description: str,
+        summary: str,
+        source: str,
+        area: str,
+        score: float,
+    ) -> None:
+        from src.database import Noticia
+
+        with self.session_factory() as session:
+            session.add(Noticia(
+                id=article_id,
+                titulo=title,
+                url=f"https://example.test/{article_id}",
+                fuente=source,
+                descripcion_original=description,
+                resumen_ia=summary,
+                area_matcheada=area,
+                fecha_ingesta=real_datetime(2026, 6, 19, 12, 0),
+                selected_score=score,
+            ))
+            session.commit()
+
+    def test_search_matches_title_description_and_summary(self) -> None:
+        self._add_article("title", "Needle in title", "", "", "Reuters", "general", 70)
+        self._add_article("description", "Other", "Needle in description", "", "Hacker News", "general", 80)
+        self._add_article("summary", "Other", "", "Needle in summary", "GitHub Blog", "general", 90)
+
+        result = self.app._buscar_corpus("needle")
+
+        self.assertEqual(result["id"].tolist(), ["summary", "description", "title"])
+
+    def test_search_respects_source_and_area_filters(self) -> None:
+        self._add_article("keep", "AI release", "", "", "OpenAI Blog", "inteligencia_artificial", 90)
+        self._add_article("wrong-source", "AI release", "", "", "Reuters", "inteligencia_artificial", 95)
+        self._add_article("wrong-area", "AI release", "", "", "OpenAI Blog", "general", 96)
+
+        result = self.app._buscar_corpus(
+            "AI",
+            fuentes=("OpenAI Blog",),
+            areas_keys=("inteligencia_artificial",),
+        )
+
+        self.assertEqual(result["id"].tolist(), ["keep"])
+
+    def test_suggestions_are_limited_and_sorted_by_score(self) -> None:
+        for index, score in enumerate([62, 98, 74, 91, 80, 86]):
+            self._add_article(
+                f"suggestion-{index}",
+                f"Agent result {index}",
+                "",
+                "",
+                "GitHub Blog",
+                "inteligencia_artificial",
+                score,
+            )
+
+        suggestions = self.app._sugerir_corpus("agent")
+
+        self.assertEqual(len(suggestions), 5)
+        self.assertEqual([item["score"] for item in suggestions], [98.0, 91.0, 86.0, 80.0, 74.0])
+
+    def test_suggestions_require_two_characters(self) -> None:
+        self._add_article("short-query", "AI release", "", "", "OpenAI Blog", "inteligencia_artificial", 90)
+
+        self.assertEqual(self.app._sugerir_corpus("a"), [])
+
+
 class TestGlobalNewsIngestion(unittest.TestCase):
     def test_hacker_news_algolia_failure_reports_specific_worker_name(self) -> None:
         import src.ingestor as ingestor
@@ -421,6 +591,7 @@ class TestGlobalNewsIngestion(unittest.TestCase):
                 excerpt="Researchers reported a credential campaign.",
                 category="Cybersecurity",
                 score=10,
+                published_at="2026-06-19T12:34:56Z",
             ),
             normalize_global_item(
                 title="Getting more from each token",
@@ -444,10 +615,96 @@ class TestGlobalNewsIngestion(unittest.TestCase):
 
         self.assertEqual([n.fuente for n in noticias], ["Reuters", "GitHub Blog", "OpenAI Blog"])
         self.assertEqual(noticias[0].area_matcheada, "ciberseguridad")
+        self.assertEqual(noticias[0].fecha_publicacion, real_datetime(2026, 6, 19, 12, 34, 56))
+        self.assertIsNone(noticias[1].fecha_publicacion)
         self.assertTrue(noticias[1].titulo.startswith("[Global]"))
+
+    def test_duplicate_item_receives_missing_verified_publication_time(self) -> None:
+        import src.ingestor as ingestor
+        from src.database import Noticia
+
+        existing = Noticia(
+            id="existing",
+            titulo="Existing story",
+            url="https://www.reuters.com/technology/example/",
+            fuente="Reuters",
+            fecha_ingesta=real_datetime(2026, 6, 19, 12, 0),
+        )
+        incoming = Noticia(
+            id="existing",
+            titulo="Existing story",
+            url="https://www.reuters.com/technology/example/",
+            fuente="Reuters",
+            fecha_publicacion=real_datetime(2026, 6, 19, 10, 30),
+            fecha_ingesta=real_datetime(2026, 6, 19, 12, 0),
+        )
+
+        @contextmanager
+        def fake_session():
+            class Session:
+                def get(self, *_args):
+                    return existing
+
+                def commit(self):
+                    return None
+
+            yield Session()
+
+        metrics = {
+            "total_procesadas": 1,
+            "fuentes_fallidas": 0,
+            "nombres_fallidas": [],
+            "no_relevantes": 0,
+        }
+        config = {
+            "app": {},
+            "areas_interes": {},
+            "fuentes": [{"nombre": "Global IT Brief", "tipo": "global_news"}],
+        }
+
+        with patch.object(ingestor, "cargar_config", return_value=config), \
+             patch.object(ingestor, "_worker_global_news", return_value=([incoming], metrics)), \
+             patch.object(ingestor, "get_session", side_effect=fake_session):
+            ingestor.ejecutar_ingesta()
+
+        self.assertEqual(existing.fecha_publicacion, real_datetime(2026, 6, 19, 10, 30))
 
 
 class TestBriefUi(unittest.TestCase):
+    def test_hacker_news_comments_use_discussion_url_or_hn_article_url(self) -> None:
+        from app import _comment_count, _discussion_url
+
+        stored = type("Item", (), {
+            "discussion_url": "https://news.ycombinator.com/item?id=123",
+            "url": "https://example.test/article",
+            "fuente": "Hacker News",
+        })()
+        legacy = type("Item", (), {
+            "discussion_url": "",
+            "url": "https://news.ycombinator.com/item?id=456",
+            "fuente": "Hacker News",
+        })()
+
+        self.assertEqual(_discussion_url(stored), "https://news.ycombinator.com/item?id=123")
+        self.assertEqual(_discussion_url(legacy), "https://news.ycombinator.com/item?id=456")
+        self.assertEqual(_comment_count({"Comentarios": 164, "Comentarios URL": stored.discussion_url}), 164)
+        self.assertEqual(_comment_count({"Comentarios": "", "Comentarios URL": stored.discussion_url}), 0)
+
+    def test_main_uses_component_search_instead_of_native_text_input(self) -> None:
+        source = Path("app.py").read_text(encoding="utf-8")
+        component_source = Path("src/search_component.py").read_text(encoding="utf-8")
+
+        self.assertIn("_render_corpus_search(filtros)", source)
+        self.assertNotIn("st.text_input(", source)
+        self.assertIn('type="text"', component_source)
+        self.assertNotIn('type="search"', component_source)
+
+    def test_main_has_no_historical_tab(self) -> None:
+        source = Path("app.py").read_text(encoding="utf-8")
+
+        self.assertNotIn("st.tabs(", source)
+        self.assertNotIn("_render_tab_historico", source)
+
     def test_fuentes_catalogo_includes_global_sources(self) -> None:
         from app import FUENTES_CATALOGO
 
@@ -461,6 +718,11 @@ class TestBriefUi(unittest.TestCase):
         self.assertIsNone(_feed_card_metric_text("Reuters", 0, None))
         self.assertEqual(_feed_card_metric_text("Hacker News", 42, None), "⬆️ 42 points")
         self.assertEqual(_feed_card_metric_text("GitHub Trending", 1200, None), "⭐ 1,200 stars today")
+
+    def test_feed_cards_do_not_render_missing_description_placeholder(self) -> None:
+        source = Path("app.py").read_text(encoding="utf-8")
+
+        self.assertNotIn('st.caption("Sin descripción disponible.")', source)
 
     def test_normalizar_citas_brief_keeps_only_source_urls(self) -> None:
         from app import _normalizar_citas_brief
@@ -482,24 +744,6 @@ class TestBriefUi(unittest.TestCase):
             normalized["sources"],
             [{"name": "Reuters", "url": "https://www.reuters.com/world/example/"}],
         )
-
-    def test_select_featured_items_uses_score_and_source_diversity(self) -> None:
-        import pandas as pd
-
-        from app import _select_featured_items
-
-        df = pd.DataFrame([
-            {"Título": f"HN story {i}", "Fuente": "Hacker News", "Área": "inteligencia_artificial", "Selected Score": 95 - i}
-            for i in range(5)
-        ] + [
-            {"Título": "Reuters story", "Fuente": "Reuters", "Área": "ciberseguridad", "Selected Score": 89}
-        ])
-
-        selected = _select_featured_items(df, limit=5, threshold=70)
-
-        self.assertLessEqual((selected["Fuente"] == "Hacker News").sum(), 3)
-        self.assertIn("Reuters", selected["Fuente"].tolist())
-
 
 if __name__ == "__main__":
     unittest.main()

@@ -49,7 +49,7 @@ class GlobalNewsItem:
     title: str
     source: str
     url: str
-    published_at: str
+    published_at: str | None
     excerpt: str
     category: str
     score: int = 0
@@ -62,20 +62,24 @@ def _strip_html(value: str) -> str:
     return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", value or "")).strip()
 
 
-def _parse_date(value: Any) -> str:
+def _parse_date(value: Any) -> str | None:
     if isinstance(value, datetime):
         dt = value
     elif isinstance(value, str) and value.strip():
+        raw_value = value.strip()
         try:
-            dt = parsedate_to_datetime(value)
+            dt = datetime.fromisoformat(raw_value.replace("Z", "+00:00"))
         except (TypeError, ValueError):
-            return value[:32]
+            try:
+                dt = parsedate_to_datetime(raw_value)
+            except (TypeError, ValueError):
+                return None
     else:
-        dt = datetime.now(timezone.utc)
+        return None
 
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc).date().isoformat()
+    return dt.astimezone(timezone.utc).isoformat()
 
 
 def _source_allowed(source: str, url: str) -> bool:

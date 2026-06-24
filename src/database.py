@@ -81,6 +81,7 @@ class Noticia(Base):
     id: str = Column(String(64), primary_key=True, index=True)
     titulo: str = Column(String(512), nullable=False)
     url: str = Column(Text, nullable=False)
+    discussion_url: str = Column(Text, nullable=True)
     fuente: str = Column(String(128), nullable=False)
     fecha_publicacion: datetime = Column(DateTime, nullable=True)
     descripcion_original: str = Column(Text, nullable=True)
@@ -249,6 +250,7 @@ def migrar_schema() -> None:
         existing_cols = {col["name"] for col in inspector.get_columns("noticias")}
 
         nuevas_columnas = {
+            "discussion_url": "ALTER TABLE noticias ADD COLUMN discussion_url TEXT",
             "cluster_id":    "ALTER TABLE noticias ADD COLUMN cluster_id INTEGER",
             "entidades_json": "ALTER TABLE noticias ADD COLUMN entidades_json TEXT",
             "sentimiento":    "ALTER TABLE noticias ADD COLUMN sentimiento VARCHAR(32) DEFAULT 'neutral'",

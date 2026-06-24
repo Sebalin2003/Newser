@@ -305,8 +305,8 @@ def build_coverage_context(items: list[Any]) -> dict[Any, tuple[int, int]]:
 def score_recent_items(config: dict[str, Any], hours: int = 24) -> int:
     from .database import Noticia, get_session
 
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
     now = datetime.now(timezone.utc)
+    cutoff = (now - timedelta(hours=hours)).replace(tzinfo=None)
     updated = 0
     with get_session() as session:
         items = (

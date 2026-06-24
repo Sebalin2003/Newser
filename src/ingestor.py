@@ -119,6 +119,18 @@ def _area_desde_categoria_global(category: str) -> str:
     return mapping.get(category or "IT", "ciencias_computacion")
 
 
+def _fecha_global_utc(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        fecha = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if fecha.tzinfo is not None:
+        fecha = fecha.astimezone(timezone.utc).replace(tzinfo=None)
+    return fecha
+
+
 def _noticias_desde_global_items(items: list[GlobalNewsItem]) -> list[Noticia]:
     noticias: list[Noticia] = []
     for item in items:
@@ -127,7 +139,7 @@ def _noticias_desde_global_items(items: list[GlobalNewsItem]) -> list[Noticia]:
             titulo=f"[Global] {item.title}",
             url=item.url,
             fuente=item.source,
-            fecha_publicacion=_ahora_utc(),
+            fecha_publicacion=_fecha_global_utc(item.published_at),
             descripcion_original=item.excerpt[:1000],
             resumen_ia="Resumen no disponible",
             area_matcheada=_area_desde_categoria_global(item.category),
@@ -278,7 +290,7 @@ def _worker_github(
                 titulo=titulo,
                 url=url_repo,
                 fuente=nombre_base,
-                fecha_publicacion=_ahora_utc(),
+                fecha_publicacion=None,
                 descripcion_original=descripcion[:1000],
                 resumen_ia="Resumen no disponible",
                 area_matcheada=area,
@@ -369,9 +381,10 @@ def _worker_hn(
 
             titulo = item.get("title", "").strip()
             url = item.get("url", f"https://news.ycombinator.com/item?id={item.get('id')}")
+            discussion_url = f"https://news.ycombinator.com/item?id={item.get('id')}"
             texto = item.get("text", "") or ""
             ts = item.get("time")
-            fecha = datetime.fromtimestamp(ts, tz=timezone.utc).replace(tzinfo=None) if ts else _ahora_utc()
+            fecha = datetime.fromtimestamp(ts, tz=timezone.utc).replace(tzinfo=None) if ts else None
 
             if not titulo:
                 continue
@@ -385,6 +398,7 @@ def _worker_hn(
                 id=id_hash,
                 titulo=f"[HN] {titulo} 🔺{score}",
                 url=url,
+                discussion_url=discussion_url,
                 fuente=nombre,
                 fecha_publicacion=fecha,
                 descripcion_original=texto[:1000],
@@ -454,10 +468,11 @@ def _worker_hn_algolia(
             metricas["total_procesadas"] += 1
             titulo = (hit.get("title") or "").strip()
             url_hit = hit.get("url") or f"https://news.ycombinator.com/item?id={hit.get('objectID')}"
+            discussion_url = f"https://news.ycombinator.com/item?id={hit.get('objectID')}"
             texto = hit.get("story_text") or ""
             score = hit.get("points", 0)
             ts = hit.get("created_at_i")
-            fecha = datetime.fromtimestamp(ts, tz=timezone.utc).replace(tzinfo=None) if ts else _ahora_utc()
+            fecha = datetime.fromtimestamp(ts, tz=timezone.utc).replace(tzinfo=None) if ts else None
 
             if not titulo:
                 continue
@@ -471,6 +486,7 @@ def _worker_hn_algolia(
                 id=id_hash,
                 titulo=f"[HN] {titulo} 🔺{score}",
                 url=url_hit,
+                discussion_url=discussion_url,
                 fuente=nombre,
                 fecha_publicacion=fecha,
                 descripcion_original=texto[:1000],
@@ -691,10 +707,15 @@ def ejecutar_ingesta(progress_callback: Callable[[str], None] | None = None) -> 
         noticias_unicas = {n.id: n for n in todas_noticias}
         with get_session() as session:
             for noticia in noticias_unicas.values():
-                if session.get(Noticia, noticia.id) is None:
+                existing = session.get(Noticia, noticia.id)
+                if existing is None:
                     session.add(noticia)
                     metricas["nuevas_persistidas"] += 1
                 else:
+                    if noticia.discussion_url and not existing.discussion_url:
+                        existing.discussion_url = noticia.discussion_url
+                    if existing.fecha_publicacion is None and noticia.fecha_publicacion is not None:
+                        existing.fecha_publicacion = noticia.fecha_publicacion
                     metricas["duplicadas_omitidas"] += 1
             session.commit()
 

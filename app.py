@@ -31,6 +31,7 @@ import requests
 import streamlit as st
 import yaml
 from dotenv import load_dotenv
+from sqlalchemy import or_
 from streamlit.runtime.scriptrunner import add_script_run_ctx
 from streamlit_autorefresh import st_autorefresh
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -40,13 +41,14 @@ import atexit
 from src.database import (
     MacroResumen,
     Noticia,
-    Tendencia,
     get_session,
     init_db,
     limpiar_datos_antiguos,
 )
 from src.ingestor import ejecutar_ingesta
 from src.processor import ejecutar_procesamiento, generar_resumen_individual
+from src.scoring import SCORE_VERSION, calculate_item_score
+from src.search_component import render_corpus_search
 
 load_dotenv()
 
@@ -78,8 +80,6 @@ AREAS_CATALOGO: dict[str, str] = {
     "Hardware & Semiconductores":      "semiconductores",
 }
 
-# Ventana fija de la pestaña analítica (días)
-HISTORICO_DIAS: int = 7
 PIPELINE_INTERVALO_HORAS: int = 6  # cada cuántas horas se ejecuta automáticamente
 
 # Mapping área → color badge nativo de Streamlit
@@ -160,62 +160,185 @@ def _cargar_config() -> dict[str, Any]:
         return yaml.safe_load(f) or {}
 
 
+def _score_display_fields(n: Noticia, config: dict[str, Any]) -> dict[str, Any]:
+    """Devuelve score/tags/reason persistidos o calculados localmente para display."""
+    if n.selected_score is not None:
+        return {
+            "selected_score": n.selected_score,
+            "tags_json": n.tags_json or "[]",
+            "selection_reason": n.selection_reason or "",
+            "score_version": n.score_version or "",
+        }
+    result = calculate_item_score(n, config=config)
+    return {
+        "selected_score": result.selected_score,
+        "tags_json": json.dumps(result.tags, ensure_ascii=False),
+        "selection_reason": result.reason,
+        "score_version": SCORE_VERSION,
+    }
+
+
+def _discussion_url(n: Noticia) -> str:
+    if n.discussion_url:
+        return str(n.discussion_url)
+    url = str(n.url or "")
+    if n.fuente == "Hacker News" and "news.ycombinator.com/item" in url:
+        return url
+    return ""
+
+
 @st.cache_data(ttl=60, show_spinner=False)
-def _obtener_noticias(
+def _buscar_corpus(
+    query: str,
     fuentes: tuple[str, ...] = (),
     areas_keys: tuple[str, ...] = (),
-    dias: int = 30,
 ) -> pd.DataFrame:
     """
-    Carga noticias desde DB aplicando filtros directamente en SQLAlchemy (DB pushdown).
-    Evita cargar tablas completas en RAM (requerimiento de OOM protection del PRD).
+    Busca en el corpus local aplicando filtros directamente en SQLite.
     """
-    cutoff = datetime.now(timezone.utc) - timedelta(days=dias)
+    config = _cargar_config()
     registros: list[dict] = []
     with get_session() as session:
-        q = (
-            session.query(Noticia)
-            .filter(Noticia.fecha_ingesta >= cutoff)
-            .order_by(Noticia.fecha_ingesta.desc())
+        pattern = f"%{query.strip()}%"
+        q = session.query(Noticia).filter(
+            or_(
+                Noticia.titulo.ilike(pattern),
+                Noticia.descripcion_original.ilike(pattern),
+                Noticia.resumen_ia.ilike(pattern),
+            )
         )
         if fuentes:
             q = q.filter(Noticia.fuente.in_(list(fuentes)))
         if areas_keys:
             q = q.filter(Noticia.area_matcheada.in_(list(areas_keys)))
-        rows = q.limit(2000).all()  # hard cap OOM: max 2000 registros por query
+        rows = q.order_by(
+            Noticia.selected_score.desc(),
+            Noticia.fecha_ingesta.desc(),
+        ).limit(200).all()
         for n in rows:
+            score_fields = _score_display_fields(n, config)
             registros.append({
                 "id":             str(n.id or ""),
                 "Título":         str(n.titulo or ""),
                 "URL":            str(n.url or ""),
+                "Comentarios URL": _discussion_url(n),
                 "Fuente":         str(n.fuente or ""),
                 "Área":           n.area_matcheada or "general",
                 "Publicada":      n.fecha_publicacion.isoformat() if n.fecha_publicacion else None,
                 "Resumen IA":     str(n.resumen_ia or ""),
+                "Descripción":    str(n.descripcion_original or ""),
                 "Ingestada":      n.fecha_ingesta.isoformat() if n.fecha_ingesta else None,
                 "entidades_json": n.entidades_json or "[]",
                 "Sentimiento":    n.sentimiento or "neutral",
-                "Selected Score":  n.selected_score,
-                "Tags":            n.tags_json or "[]",
-                "Motivo seleccion": n.selection_reason or "",
-                "Score Version":   n.score_version or "",
+                "Ranking":        n.ranking,
+                "Comentarios":    n.num_comentarios,
+                "Score":          n.score,
+                "Selected Score":  score_fields["selected_score"],
+                "Tags":            score_fields["tags_json"],
+                "Motivo seleccion": score_fields["selection_reason"],
+                "Score Version":   score_fields["score_version"],
             })
     if not registros:
         return pd.DataFrame()
     df = pd.DataFrame(registros)
     df["Publicada"] = pd.to_datetime(df["Publicada"], errors="coerce", utc=True)
     df["Ingestada"] = pd.to_datetime(df["Ingestada"], errors="coerce", utc=True)
-    return df
+    df["Métrica"] = df.apply(lambda r: _extraer_metrica(r["Título"], r["Fuente"]), axis=1)
+    df["Label"] = df["Título"].apply(
+        lambda t: _re.sub(r"^\[\w+\]\s*", "", t).split("⭐")[0].split("🔺")[0].split("(+")[0].strip()[:55]
+    )
+    return df.sort_values(
+        ["Selected Score", "Ingestada"],
+        ascending=[False, False],
+        na_position="last",
+        kind="stable",
+    ).reset_index(drop=True)
+
+
+def _relative_time(fecha: datetime | None) -> str:
+    if fecha is None:
+        return "Sin fecha"
+    if fecha.tzinfo is None:
+        fecha = fecha.replace(tzinfo=timezone.utc)
+    elapsed = max(0, int((datetime.now(timezone.utc) - fecha).total_seconds()))
+    if elapsed < 3600:
+        return f"Hace {max(1, elapsed // 60)}m"
+    if elapsed < 86400:
+        return f"Hace {elapsed // 3600}h"
+    return f"Hace {elapsed // 86400}d"
 
 
 @st.cache_data(ttl=60, show_spinner=False)
-def _obtener_tendencias() -> pd.DataFrame:
-    registros: list[dict] = []
+def _sugerir_corpus(
+    query: str,
+    fuentes: tuple[str, ...] = (),
+    areas_keys: tuple[str, ...] = (),
+) -> list[dict[str, Any]]:
+    query = query.strip()
+    if len(query) < 2:
+        return []
+
+    config = _cargar_config()
+    pattern = f"%{query}%"
     with get_session() as session:
-        rows = session.query(Tendencia).order_by(Tendencia.frecuencia.desc()).all()
-        for t in rows:
-            registros.append({"Término": t.palabra, "Frecuencia": t.frecuencia})
-    return pd.DataFrame(registros) if registros else pd.DataFrame()
+        q = session.query(Noticia).filter(
+            or_(
+                Noticia.titulo.ilike(pattern),
+                Noticia.descripcion_original.ilike(pattern),
+                Noticia.resumen_ia.ilike(pattern),
+            )
+        )
+        if fuentes:
+            q = q.filter(Noticia.fuente.in_(list(fuentes)))
+        if areas_keys:
+            q = q.filter(Noticia.area_matcheada.in_(list(areas_keys)))
+        rows = q.order_by(
+            Noticia.selected_score.desc(),
+            Noticia.fecha_ingesta.desc(),
+        ).limit(5).all()
+        suggestions: list[dict[str, Any]] = []
+        for noticia in rows:
+            score_fields = _score_display_fields(noticia, config)
+            suggestions.append({
+                "id": str(noticia.id),
+                "title": str(noticia.titulo or ""),
+                "source": str(noticia.fuente or ""),
+                "score": float(score_fields["selected_score"]),
+                "freshness": _relative_time(noticia.fecha_ingesta),
+            })
+    return suggestions
+
+
+def _render_corpus_search(filtros: dict) -> str | None:
+    submitted = str(st.session_state.get("busqueda_enviada", "")).strip()
+    draft = str(st.session_state.get("busqueda_borrador", submitted)).strip()
+    suggestions = _sugerir_corpus(
+        draft,
+        tuple(filtros.get("fuentes", [])),
+        tuple(filtros.get("areas_keys", [])),
+    )
+    result = render_corpus_search({
+        "draft": draft,
+        "suggestions": suggestions,
+        "showSuggestions": len(draft) >= 2 and draft != submitted,
+        "focusInput": bool(draft and draft != submitted),
+    })
+    cleared = bool(result.get("clear"))
+    submitted_query = str(result.get("submit") or "").strip()
+    next_draft = str(result.get("draft") or "").strip()
+
+    if cleared:
+        st.session_state["busqueda_borrador"] = ""
+        st.session_state["busqueda_enviada"] = ""
+        st.rerun()
+    if submitted_query:
+        st.session_state["busqueda_borrador"] = submitted_query
+        st.session_state["busqueda_enviada"] = submitted_query
+        st.rerun()
+    if next_draft != draft:
+        st.session_state["busqueda_borrador"] = next_draft
+        st.rerun()
+    return submitted or None
 
 
 @st.cache_data(ttl=30, show_spinner=False)
@@ -303,7 +426,7 @@ def _render_sidebar(config: dict) -> tuple[bool, dict]:
         version = config.get("app", {}).get("version", "2.0.0")
 
         # --- Header ---
-        st.markdown("### News Trend Analyzer")
+        st.markdown("### Newser")
         st.caption(f"Developer pulse · v{version}")
         st.divider()
 
@@ -345,12 +468,6 @@ def _render_sidebar(config: dict) -> tuple[bool, dict]:
         st.divider()
         st.markdown("**System state**")
 
-        # Detección de Gemini (autónoma, sin import de processor)
-        if GEMINI_API_KEY:
-            st.success("Gemini configurado", icon="🤖")
-        else:
-            st.warning("Gemini sin configurar", icon="⚠️")
-
         # Último análisis
         macro = _obtener_macro_resumen_hoy()
         if macro and macro.get("fecha_generacion"):
@@ -369,13 +486,6 @@ def _render_sidebar(config: dict) -> tuple[bool, dict]:
                 st.caption(f"Próximo automático: {proxima}")
             elif not tiene_descripcion:
                 st.caption("Scheduler no activo")
-
-        # --- Config avanzada ---
-        app_cfg = config.get("app", {})
-        with st.expander("Configuración avanzada", expanded=False):
-            st.caption(f"Timeout HTTP: `{app_cfg.get('timeout_request', 15)}s`")
-            st.caption(f"Noticias IA por ejecución: `{app_cfg.get('max_noticias_ia', 10)}`")
-            st.caption(f"Score mín. HN: `{app_cfg.get('hn_min_score', 100)}`")
 
         # --- ETL Controls ---
         st.divider()
@@ -529,6 +639,7 @@ def _extraer_metrica(titulo: str, fuente: str) -> int:
 def _obtener_noticias_hoy() -> pd.DataFrame:
     """Carga noticias de las últimas 24h desde DB (sin dependencia de Cluster)."""
     cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+    config = _cargar_config()
     registros: list[dict] = []
     with get_session() as session:
         rows = (
@@ -538,10 +649,12 @@ def _obtener_noticias_hoy() -> pd.DataFrame:
             .all()
         )
         for n in rows:
+            score_fields = _score_display_fields(n, config)
             registros.append({
                 "id":          str(n.id),
                 "Título":      str(n.titulo or ""),
                 "URL":         str(n.url or ""),
+                "Comentarios URL": _discussion_url(n),
                 "Fuente":      str(n.fuente or ""),
                 "Área":        str(n.area_matcheada or "general"),
                 "Ingestada":   n.fecha_ingesta,
@@ -552,10 +665,10 @@ def _obtener_noticias_hoy() -> pd.DataFrame:
                 "Ranking":     n.ranking,
                 "Comentarios": n.num_comentarios,
                 "Score":       n.score,
-                "Selected Score": n.selected_score,
-                "Tags":        n.tags_json or "[]",
-                "Motivo seleccion": n.selection_reason or "",
-                "Score Version": n.score_version or "",
+                "Selected Score": score_fields["selected_score"],
+                "Tags":        score_fields["tags_json"],
+                "Motivo seleccion": score_fields["selection_reason"],
+                "Score Version": score_fields["score_version"],
             })
     if not registros:
         return pd.DataFrame()
@@ -607,75 +720,36 @@ def _selected_score_value(row: dict | pd.Series) -> float:
         return 0.0
 
 
-def _select_featured_items(df: pd.DataFrame, limit: int = 8, threshold: float = 70.0) -> pd.DataFrame:
-    if df.empty or "Selected Score" not in df.columns:
-        return pd.DataFrame()
-    candidates = df.copy()
-    candidates["_selected_score"] = candidates.apply(_selected_score_value, axis=1)
-    if candidates["_selected_score"].max() <= 0:
-        return pd.DataFrame()
-    candidates = candidates.sort_values("_selected_score", ascending=False)
-    qualified = candidates[candidates["_selected_score"] >= threshold]
-    if len(qualified) < min(4, len(candidates)):
-        qualified = candidates.head(max(limit, min(4, len(candidates))))
-
-    selected_rows = []
-    source_counts: Counter = Counter()
-    area_counts: Counter = Counter()
-    for _, row in qualified.iterrows():
-        source = row.get("Fuente", "")
-        area = row.get("Área", "general")
-        if source_counts[source] >= 3 or area_counts[area] >= 4:
-            continue
-        selected_rows.append(row)
-        source_counts[source] += 1
-        area_counts[area] += 1
-        if len(selected_rows) >= limit:
-            break
-    return pd.DataFrame(selected_rows).drop(columns=["_selected_score"], errors="ignore")
+def _comment_count(row: dict | pd.Series) -> int:
+    try:
+        return int(row.get("Comentarios", 0) or 0)
+    except (TypeError, ValueError):
+        return 0
 
 
-def _render_selected_section(df_hoy: pd.DataFrame, filtros: dict) -> None:
-    df = df_hoy.copy()
-    if not df.empty:
-        if filtros.get("fuentes"):
-            df = df[df["Fuente"].isin(filtros["fuentes"])]
-        if filtros.get("areas_keys"):
-            df = df[df["Área"].isin(filtros["areas_keys"])]
+def _format_publication_time(value: Any) -> str:
+    try:
+        published_at = pd.Timestamp(value)
+        if pd.isna(published_at):
+            return ""
+        if published_at.tzinfo is None:
+            published_at = published_at.tz_localize("UTC")
+        else:
+            published_at = published_at.tz_convert("UTC")
+        return published_at.strftime("%d/%m/%Y %H:%M UTC")
+    except (TypeError, ValueError):
+        return ""
 
-    selected = _select_featured_items(df)
-    if selected.empty:
-        return
 
-    st.subheader("Selected")
-    st.caption("Señales de mayor prioridad calculadas localmente; Gemini no se usa para esta selección.")
-
-    for _, row in selected.iterrows():
-        score = _selected_score_value(row)
-        tags = _parse_tags(row.get("Tags"))
-        reason = str(row.get("Motivo seleccion") or "").strip()
-        description = str(row.get("Resumen IA") or "").strip()
-        if not description or description == "Resumen no disponible":
-            description = str(row.get("Descripción") or "").strip()
-        if not description:
-            description = "Sin descripcion disponible."
-
-        with st.container(border=True):
-            meta_col, score_col = st.columns([5, 1])
-            with meta_col:
-                st.caption(f"{row.get('Fuente', '')} · {_area_label(row.get('Área', 'general'))}")
-                st.markdown(f"##### {row.get('Label') or row.get('Título', '')}")
-            with score_col:
-                st.metric("Score", f"{score:.0f}")
-            if tags:
-                st.caption(" · ".join(tags))
-            st.caption(description[:260] + ("..." if len(description) > 260 else ""))
-            if reason:
-                st.info(reason)
-            url = str(row.get("URL") or "")
-            if url.startswith("http"):
-                st.link_button("Leer original", url)
-    st.divider()
+def _feed_time_display(row: dict | pd.Series) -> tuple[str, str] | None:
+    if row.get("Fuente") == "GitHub Trending":
+        label = "Detectado en tendencias"
+        value = row.get("Ingestada")
+    else:
+        label = "Publicado"
+        value = row.get("Publicada")
+    timestamp = _format_publication_time(value)
+    return (label, timestamp) if timestamp else None
 
 
 def _render_feed_card(row: dict) -> None:
@@ -686,31 +760,26 @@ def _render_feed_card(row: dict) -> None:
     badge = _area_badge(area_key, _area_label(area_key))
     metrica = row.get("Métrica", 0)
     url = row.get("URL", "")
+    selected_score = _selected_score_value(row)
+    tags = _parse_tags(row.get("Tags"))
 
     icon = "⭐" if fuente == "GitHub Trending" else "🔺"
     label_metrica = "stars today" if fuente == "GitHub Trending" else "score HN"
 
-    # Tiempo relativo
-    try:
-        delta = pd.Timestamp.now(tz="UTC") - row["Ingestada"]
-        horas = int(delta.total_seconds() // 3600)
-        minutos = int((delta.total_seconds() % 3600) // 60)
-        tiempo_str = f"Hace {horas}h" if horas > 0 else f"Hace {minutos}m"
-    except Exception:
-        tiempo_str = ""
+    time_display = _feed_time_display(row)
 
     with st.container(border=True):
         # Header de la tarjeta
-        col_meta, col_time = st.columns([4, 1])
+        col_meta, col_score = st.columns([4, 1])
         with col_meta:
             st.markdown(badge)
             st.caption(fuente)
-            selected_score = _selected_score_value(row)
-            tags = _parse_tags(row.get("Tags"))
-            if selected_score:
-                st.caption(f"Score {selected_score:.0f}" + (f" · {' · '.join(tags[:3])}" if tags else ""))
-        with col_time:
-            st.caption(tiempo_str)
+            if time_display:
+                st.caption(f"{time_display[0]}: {time_display[1]}")
+            if tags:
+                st.caption(" · ".join(tags[:3]))
+        with col_score:
+            st.metric("Score", f"{selected_score:.0f}")
 
         # Título principal
         st.markdown(f"##### {titulo_limpio}")
@@ -740,13 +809,9 @@ def _render_feed_card(row: dict) -> None:
 
         if tiene_resumen:
             st.caption(f"🤖 {str(resumen_val)[:300]}")
-        else:
-            if not es_github and tiene_descripcion:
-                desc_str = str(descripcion_val)
-                st.caption(desc_str[:220] + "..." if len(desc_str) > 220 else desc_str)
-            else:
-                if not (es_github and tiene_descripcion):
-                    st.caption("Sin descripción disponible.")
+        elif not es_github and tiene_descripcion:
+            desc_str = str(descripcion_val)
+            st.caption(desc_str[:220] + "..." if len(desc_str) > 220 else desc_str)
                 
             err_key = f"err_resumen_{row['id']}"
             if not GEMINI_API_KEY:
@@ -773,7 +838,6 @@ def _render_feed_card(row: dict) -> None:
         # Footer
         st.divider()
         col_f1, col_f2, col_f3 = st.columns([1.2, 1.2, 3])
-        comments_col = next((c for c in row.keys() if "coment" in str(c).lower()), None)
         points_col = next((c for c in row.keys() if "score" in str(c).lower()), None)
         ranking = row.get("Ranking")
 
@@ -787,9 +851,12 @@ def _render_feed_card(row: dict) -> None:
 
         with col_f2:
             if fuente == "Hacker News":
-                comments_val = row.get(comments_col) if comments_col else 0
-                comments = 0 if pd.isna(comments_val) else int(comments_val)
-                st.caption(f"💬 {comments:,} comentarios")
+                comments = _comment_count(row)
+                comments_url = str(row.get("Comentarios URL") or "")
+                if comments_url.startswith("https://news.ycombinator.com/item?"):
+                    st.markdown(f"[💬 {comments:,} comentarios]({comments_url})")
+                else:
+                    st.caption(f"💬 {comments:,} comentarios")
             elif ranking and not pd.isna(ranking):
                 st.caption(f"Ranking #{int(ranking)}")
             else:
@@ -800,7 +867,11 @@ def _render_feed_card(row: dict) -> None:
                 st.link_button("Leer original", url, use_container_width=True)
 
 
-def _render_feed_agrupado(df_hoy: pd.DataFrame, filtros: dict) -> None:
+def _render_feed_agrupado(
+    df_hoy: pd.DataFrame,
+    filtros: dict,
+    search_active: bool = False,
+) -> None:
     """
     Feed de noticias agrupado por Área temática.
     Muestra máximo 10 tarjetas por área con expander 'Ver más'.
@@ -813,50 +884,36 @@ def _render_feed_agrupado(df_hoy: pd.DataFrame, filtros: dict) -> None:
             df_hoy = df_hoy[df_hoy["Área"].isin(filtros["areas_keys"])]
 
     if df_hoy.empty:
-        st.info(
-            "Sin artículos para los filtros activos. Ejecutá 'Analizar Período'.",
-            icon="ℹ️",
+        message = (
+            "Sin resultados en el corpus para esta búsqueda."
+            if search_active
+            else "Sin artículos para los filtros activos. Ejecutá 'Analizar Período'."
         )
+        st.info(message, icon="ℹ️")
         return
 
-    def _ordenar_por_ranking(df: pd.DataFrame) -> pd.DataFrame:
-        col_score = next((c for c in df.columns if c.lower() == "score"), None)
-        col_ranking = next((c for c in df.columns if c.lower() == "ranking"), None)
-        col_fuente = next((c for c in df.columns if c.lower() == "fuente"), None)
-        
-        if not col_fuente:
-            return df
-        
-        github_mask = df[col_fuente] == "GitHub Trending"
-        hn_mask = df[col_fuente] == "Hacker News"
-        
-        github = df[github_mask]
-        if col_ranking and col_ranking in df.columns:
-            github = github.sort_values(col_ranking, ascending=True, na_position="last")
-        
-        hn = df[hn_mask]
-        if col_score and col_score in df.columns:
-            hn = hn.sort_values(col_score, ascending=False, na_position="last")
-        elif "Métrica" in df.columns:
-            hn = hn.sort_values("Métrica", ascending=False, na_position="last")
-        
-        otras = df[~(github_mask | hn_mask)]
-        return pd.concat([github, hn, otras], ignore_index=True)
-
-    df_sorted = _ordenar_por_ranking(df_hoy)
+    df_sorted = df_hoy.sort_values(
+        ["Selected Score", "Ingestada"],
+        ascending=[False, False],
+        na_position="last",
+        kind="stable",
+    )
 
     # Header
     gh_count = int((df_hoy["Fuente"] == "GitHub Trending").sum())
     hn_count = int((df_hoy["Fuente"] == "Hacker News").sum())
     global_count = int(df_hoy["Fuente"].isin(["Reuters", "GitHub Blog", "OpenAI Blog"]).sum())
-    st.subheader(f"Feed de señales · {len(df_sorted)} publicaciones")
-    st.caption(
-        f"**{gh_count}** repositorios GitHub · **{hn_count}** debates HN. "
-        "GitHub se ordena por ranking trending; HN por puntos."
-    )
-
-    if global_count:
-        st.caption(f"**{global_count}** noticias IT globales desde Reuters, GitHub Blog y OpenAI Blog.")
+    if search_active:
+        st.subheader(f"Resultados de búsqueda · {len(df_sorted)} publicaciones")
+        st.caption("Resultados ordenados por Score.")
+    else:
+        st.subheader(f"Feed de señales · {len(df_sorted)} publicaciones")
+        st.caption(
+            f"**{gh_count}** repositorios GitHub · **{hn_count}** debates HN. "
+            "Todas las publicaciones se ordenan por Score."
+        )
+        if global_count:
+            st.caption(f"**{global_count}** noticias IT globales desde Reuters, GitHub Blog y OpenAI Blog.")
 
     # Renderizar la lista plana
     CARDS_TOTALES = 50
@@ -967,125 +1024,6 @@ def _render_pipeline_result(metrics: dict) -> None:
 
 
 # ===========================================================================
-# Componentes de la pestaña Histórica
-# ===========================================================================
-
-def _render_entity_trends(df: pd.DataFrame, top_n: int = 8) -> None:
-    """Barras horizontales de entidades/términos más frecuentes."""
-    if df.empty:
-        st.info("Sin datos para el período seleccionado.", icon="ℹ️")
-        return
-
-    STOPWORDS_BASICAS = {
-        "the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for",
-        "of", "with", "by", "from", "is", "it", "this", "that", "are", "was",
-        "be", "as", "its", "not", "has", "have", "had", "de", "la", "el", "en",
-        "y", "los", "las", "un", "una", "con", "por", "para", "se", "al",
-        "github", "hacker", "news", "hn", "stars", "today", "week", "new",
-    }
-
-    counter: Counter = Counter()
-    for titulo in df.get("Título", pd.Series(dtype=str)):
-        titulo_limpio = _re.sub(r"\[.*?\]|⭐.*|🔺.*|\(\+.*\)", "", str(titulo))
-        words = _re.findall(r"[a-zA-Z]{4,}", titulo_limpio.lower())
-        for w in words:
-            if w not in STOPWORDS_BASICAS:
-                counter[w] += 1
-
-    if not counter:
-        st.info("Insuficientes datos para calcular tendencias.", icon="ℹ️")
-        return
-
-    top_terms = counter.most_common(top_n)
-    df_terms = pd.DataFrame(top_terms, columns=["Término", "Frecuencia"])
-    df_terms = df_terms.sort_values("Frecuencia", ascending=True)
-
-    fig = px.bar(
-        df_terms,
-        x="Frecuencia",
-        y="Término",
-        orientation="h",
-        color="Frecuencia",
-        color_continuous_scale=["#172033", "#2F6FED", "#7BA7FF"],
-        labels={"Frecuencia": "Menciones", "Término": ""},
-    )
-    fig.update_layout(
-        plot_bgcolor="rgba(0,0,0,0)",
-        paper_bgcolor="rgba(0,0,0,0)",
-        height=320,
-        margin=dict(l=0, r=0, t=10, b=0),
-        coloraxis_showscale=False,
-        yaxis=dict(tickfont=dict(size=13)),
-        font=dict(color="#E5E7EB"),
-        xaxis=dict(gridcolor="rgba(148,163,184,0.16)", zeroline=False),
-    )
-    st.plotly_chart(fig, use_container_width=True)
-
-
-def _render_tendencias_chart(df_tend: pd.DataFrame) -> None:
-    """Gráfico de barras con los términos NLP más frecuentes del período."""
-    if df_tend.empty:
-        st.info(
-            "Sin tendencias NLP calculadas. Ejecutá el pipeline para generarlas.",
-            icon="ℹ️",
-        )
-        return
-
-    df_plot = df_tend.head(10).sort_values("Frecuencia", ascending=True)
-    fig = px.bar(
-        df_plot,
-        x="Frecuencia",
-        y="Término",
-        orientation="h",
-        color="Frecuencia",
-        color_continuous_scale=["#0F1B2E", "#0891B2", "#67E8F9"],
-        labels={"Frecuencia": "Frecuencia NLP", "Término": ""},
-    )
-    fig.update_layout(
-        plot_bgcolor="rgba(0,0,0,0)",
-        paper_bgcolor="rgba(0,0,0,0)",
-        height=320,
-        margin=dict(l=0, r=0, t=10, b=0),
-        coloraxis_showscale=False,
-        font=dict(color="#E5E7EB"),
-        xaxis=dict(gridcolor="rgba(148,163,184,0.16)", zeroline=False),
-    )
-    st.plotly_chart(fig, use_container_width=True)
-
-
-def _render_explorador(df: pd.DataFrame) -> None:
-    """Tabla interactiva con búsqueda para explorar el corpus histórico."""
-    if df.empty:
-        st.info("Sin artículos en el corpus para el período seleccionado.", icon="ℹ️")
-        return
-
-    busqueda = st.text_input(
-        "🔍 Buscar en títulos y descripciones",
-        placeholder="ej: AI, kubernetes, startup...",
-        key="explorador_busqueda",
-    )
-
-    df_show = df.copy()
-    if busqueda:
-        mask = (
-            df_show.get("Título", pd.Series(dtype=str))
-            .str.contains(busqueda, case=False, na=False)
-        )
-        df_show = df_show[mask]
-
-    cols_display = [c for c in ["Título", "Fuente", "Área", "Ingestada"] if c in df_show.columns]
-    if not df_show.empty:
-        st.caption(f"{len(df_show)} artículo(s) encontrado(s)")
-        st.dataframe(
-            df_show[cols_display].reset_index(drop=True),
-            use_container_width=True,
-            hide_index=True,
-        )
-    else:
-        st.info("Sin resultados para la búsqueda.", icon="🔍")
-
-
-# ===========================================================================
 # Overview KPIs (con fila de contexto)
 # ===========================================================================
 
@@ -1135,17 +1073,14 @@ def _render_overview_kpis() -> None:
 
 
 # ===========================================================================
-# Pestañas
+# Vista principal
 # ===========================================================================
 
-def _render_tab_hoy(filtros: dict) -> None:
+def _render_tab_hoy(filtros: dict, df_feed: pd.DataFrame | None = None) -> None:
     """
     Pestaña Operativa — Command Center layout:
     KPIs → MacroResumen colapsable → [Feed agrupado | Panel señales]
     """
-    st.markdown("### Monitoreo de hoy")
-    st.caption("Señales recientes para detectar qué está ganando tracción en la comunidad técnica.")
-
     # KPIs
     _render_overview_kpis()
     st.divider()
@@ -1158,114 +1093,25 @@ def _render_tab_hoy(filtros: dict) -> None:
 
     # Layout 2 columnas: Feed (75%) + Señales (25%)
     df_hoy = _obtener_noticias_hoy()
-    _render_selected_section(df_hoy, filtros)
+    df_visible = df_feed if df_feed is not None else df_hoy
     col_feed, col_signals = st.columns([3, 1], gap="large")
 
     with col_feed:
-        _render_feed_agrupado(df_hoy.copy(), filtros)
+        _render_feed_agrupado(
+            df_visible.copy(),
+            filtros,
+            search_active=df_feed is not None,
+        )
 
     with col_signals:
         # Aplicar filtros al df para las señales
-        df_signals = df_hoy.copy()
+        df_signals = df_visible.copy()
         if not df_signals.empty:
             if filtros.get("fuentes"):
                 df_signals = df_signals[df_signals["Fuente"].isin(filtros["fuentes"])]
             if filtros.get("areas_keys"):
                 df_signals = df_signals[df_signals["Área"].isin(filtros["areas_keys"])]
         _render_panel_signals(df_signals)
-
-
-def _render_tab_historico(
-    df_noticias: pd.DataFrame, df_tend: pd.DataFrame, config: dict
-) -> None:
-    """
-    Pestaña Analítica: entidades 7d + sentimiento + tendencias NLP + explorador.
-    """
-    top_n = int(config.get("app", {}).get("top_entidades", 8))
-
-    # Corte fijo: últimos 7 días para el análisis de tendencias
-    df_7d = df_noticias
-    if not df_noticias.empty and "Ingestada" in df_noticias.columns:
-        cutoff_7d = pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=HISTORICO_DIAS)
-        df_7d = df_noticias[df_noticias["Ingestada"] >= cutoff_7d].copy()
-
-    # — Entidades + Sentimiento —
-    col_main, col_stats = st.columns([2, 1], gap="large")
-
-    with col_main:
-        st.subheader(f"Entidades en tendencia · últimos {HISTORICO_DIAS} días")
-        st.caption("Términos que aparecen con más fuerza en titulares recientes.")
-        _render_entity_trends(df_7d, top_n=top_n)
-
-    with col_stats:
-        st.subheader("Sentimiento (7d)")
-        if not df_7d.empty and "Sentimiento" in df_7d.columns:
-            df_sent = df_7d["Sentimiento"].value_counts().reset_index()
-            df_sent.columns = ["Sentimiento", "N"]
-            df_sent["Sentimiento"] = df_sent["Sentimiento"].astype(str).str.lower()
-
-            color_map = {
-                "positivo": "#34D399",
-                "negativo": "#F87171",
-                "neutral":  "#94A3B8",
-            }
-
-            fig = px.pie(
-                df_sent,
-                values="N",
-                names="Sentimiento",
-                hole=0.4,
-                color="Sentimiento",
-                color_discrete_map=color_map,
-            )
-            fig.update_traces(
-                textposition="inside",
-                textinfo="percent+label",
-                marker=dict(line=dict(color="#000000", width=1)),
-            )
-            fig.update_layout(
-                margin=dict(l=0, r=0, t=10, b=10),
-                plot_bgcolor="rgba(0,0,0,0)",
-                paper_bgcolor="rgba(0,0,0,0)",
-                showlegend=False,
-                height=220,
-                font=dict(color="#E5E7EB"),
-            )
-            st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.info("Sin datos de sentimiento.", icon="ℹ️")
-
-    st.divider()
-
-    # — Tendencias NLP —
-    col_chart, _ = st.columns([2, 1])
-    with col_chart:
-        st.subheader("Top términos · NLP")
-        st.caption("Frecuencia calculada por el pipeline de procesamiento.")
-        _render_tendencias_chart(df_tend)
-
-    st.divider()
-
-    # — Explorador histórico —
-    st.subheader("Explorador histórico")
-    _render_explorador(df_noticias)
-
-
-# ===========================================================================
-# Aplicación de filtros de usuario
-# ===========================================================================
-
-def _aplicar_filtros(df_noticias: pd.DataFrame, filtros: dict) -> pd.DataFrame:
-    """Aplica filtros de fuente y área al DataFrame de noticias."""
-    df = df_noticias.copy()
-
-    if filtros.get("fuentes") and not df.empty:
-        df = df[df["Fuente"].isin(filtros["fuentes"])]
-
-    if filtros.get("areas_keys") and not df.empty:
-        df = df[df["Área"].isin(filtros["areas_keys"])]
-
-    return df
 
 
 # ===========================================================================
@@ -1352,8 +1198,8 @@ def main() -> None:
     disparar, filtros = _render_sidebar(config)
 
     # Header
-    st.title("Developer Pulse")
-    st.caption("Radar local de repositorios, debates técnicos y narrativas emergentes.")
+    st.title("IT News Trend Analyzer")
+    busqueda_enviada = _render_corpus_search(filtros)
 
     # Ejecución del pipeline (background)
     if disparar and not st.session_state.etl_is_running:
@@ -1371,42 +1217,31 @@ def main() -> None:
     if st.session_state.get("etl_metrics") and not st.session_state.get("etl_is_running"):
         if not st.session_state.get("etl_done_notified"):
             # Invalidar cachés para forzar recarga de datos frescos
-            _obtener_noticias.clear()
-            _obtener_tendencias.clear()
+            _buscar_corpus.clear()
+            _sugerir_corpus.clear()
             _obtener_macro_resumen_hoy.clear()
             _obtener_stats_globales.clear()
             st.session_state.etl_done_notified = True
 
-        st.success("Pipeline ETL completado.", icon="✅")
-        st.subheader("Resultado de la ejecución")
-        _render_pipeline_result(st.session_state.etl_metrics)
-        if st.button("Cerrar resultados", key="close_metrics"):
-            st.session_state.etl_metrics = None
-            st.session_state.etl_done_notified = False
-            st.rerun()
-        st.divider()
+        if not busqueda_enviada:
+            st.success("Pipeline ETL completado.", icon="✅")
+            st.subheader("Resultado de la ejecución")
+            _render_pipeline_result(st.session_state.etl_metrics)
+            if st.button("Cerrar resultados", key="close_metrics"):
+                st.session_state.etl_metrics = None
+                st.session_state.etl_done_notified = False
+                st.rerun()
+            st.divider()
 
-    # -------------------------------------------------------------------------
-    # Precarga de ambos datasets antes del render de tabs.
-    # @st.cache_data garantiza que las llamadas subsiguientes (dentro de los tabs)
-    # retornen inmediatamente desde memoria — cambio de tab instantáneo.
-    # -------------------------------------------------------------------------
-    df_noticias = _obtener_noticias()          # corpus completo desde DB
-    df_tend     = _obtener_tendencias()        # top términos NLP
-    _obtener_macro_resumen_hoy()               # warm-up caché
-    _obtener_stats_globales()                  # warm-up caché: KPIs
-
-    # Aplicar filtros de fuente/área del sidebar (sin filtro de período)
-    df_filtrado = _aplicar_filtros(df_noticias, filtros)
-
-    # Tabs duales — navegación instantánea (datos ya en memoria)
-    tab_hoy, tab_historico = st.tabs(["📡 Monitoreo de Hoy", "📈 Tendencias 7 Días"])
-
-    with tab_hoy:
+    if busqueda_enviada:
+        df_busqueda = _buscar_corpus(
+            busqueda_enviada,
+            tuple(filtros.get("fuentes", [])),
+            tuple(filtros.get("areas_keys", [])),
+        )
+        _render_feed_agrupado(df_busqueda, filtros, search_active=True)
+    else:
         _render_tab_hoy(filtros)
-
-    with tab_historico:
-        _render_tab_historico(df_filtrado, df_tend, config)
 
 
 # ---------------------------------------------------------------------------
