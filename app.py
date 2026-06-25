@@ -27,7 +27,6 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 import pandas as pd
-import plotly.express as px
 import requests
 import streamlit as st
 import yaml
@@ -72,14 +71,46 @@ FUENTES_CATALOGO: list[str] = [
 ]
 
 AREAS_CATALOGO: dict[str, str] = {
-    "Inteligencia Artificial & MLOps": "inteligencia_artificial",
-    "Data Engineering":                "data_engineering",
-    "Ciberseguridad":                  "ciberseguridad",
-    "Startups & Producto":             "startups_tecnologia",
-    "Cloud Computing":                 "cloud_computing",
-    "Ciencias de la Computación":      "ciencias_computacion",
-    "Arquitectura de Software":        "arquitectura_software",
-    "Hardware & Semiconductores":      "semiconductores",
+    "AI & Agents":              "ai_agents",
+    "Developer Tools":          "developer_tools",
+    "Cybersecurity":            "cybersecurity",
+    "Infrastructure & Cloud":   "infrastructure_cloud",
+    "Chips & Hardware":         "chips_hardware",
+}
+
+AREA_COMPATIBILITY: dict[str, str] = {
+    "inteligencia_artificial": "ai_agents",
+    "ai_agents": "ai_agents",
+    "arquitectura_software": "developer_tools",
+    "ciencias_computacion": "developer_tools",
+    "developer_tools": "developer_tools",
+    "ciberseguridad": "cybersecurity",
+    "cybersecurity": "cybersecurity",
+    "cloud_computing": "infrastructure_cloud",
+    "data_engineering": "infrastructure_cloud",
+    "infrastructure_cloud": "infrastructure_cloud",
+    "semiconductores": "chips_hardware",
+    "chips_hardware": "chips_hardware",
+    "startups_tecnologia": "general",
+    "general": "general",
+}
+
+AREA_DB_KEYS_BY_CORE: dict[str, list[str]] = {
+    core: sorted([area for area, mapped in AREA_COMPATIBILITY.items() if mapped == core])
+    for core in set(AREA_COMPATIBILITY.values())
+}
+
+AREA_LABEL_BY_KEY: dict[str, str] = {value: label for label, value in AREAS_CATALOGO.items()}
+
+LEGACY_AREA_LABEL_KEYS: dict[str, str] = {
+    "Inteligencia Artificial & MLOps": "ai_agents",
+    "Data Engineering": "infrastructure_cloud",
+    "Ciberseguridad": "cybersecurity",
+    "Startups & Producto": "general",
+    "Cloud Computing": "infrastructure_cloud",
+    "Ciencias de la Computación": "developer_tools",
+    "Arquitectura de Software": "developer_tools",
+    "Hardware & Semiconductores": "chips_hardware",
 }
 
 FEED_REFRESH_INTERVAL = timedelta(minutes=30)
@@ -88,28 +119,22 @@ FILTER_WINDOW_DAYS = 7
 
 # Mapping área → color badge nativo de Streamlit
 AREA_BADGE_COLOR: dict[str, str] = {
-    "inteligencia_artificial": "blue",
-    "data_engineering":        "violet",
-    "ciberseguridad":          "red",
-    "startups_tecnologia":     "green",
-    "cloud_computing":         "blue",
-    "ciencias_computacion":    "orange",
-    "arquitectura_software":   "gray",
-    "semiconductores":         "orange",
-    "general":                 "gray",
+    "ai_agents":            "blue",
+    "developer_tools":      "gray",
+    "cybersecurity":        "red",
+    "infrastructure_cloud": "violet",
+    "chips_hardware":       "orange",
+    "general":              "gray",
 }
 
 # Mapping área → emoji para headers del feed
 AREA_EMOJIS: dict[str, str] = {
-    "inteligencia_artificial": "🤖",
-    "data_engineering":        "🔧",
-    "ciberseguridad":          "🛡️",
-    "startups_tecnologia":     "🚀",
-    "cloud_computing":         "☁️",
-    "ciencias_computacion":    "🧬",
-    "arquitectura_software":   "🏗️",
-    "semiconductores":         "💾",
-    "general":                 "📌",
+    "ai_agents":            "🤖",
+    "developer_tools":      "🛠️",
+    "cybersecurity":        "🛡️",
+    "infrastructure_cloud": "☁️",
+    "chips_hardware":       "💾",
+    "general":              "📌",
 }
 
 CHART_COLOR_SEQUENCE: list[str] = [
@@ -133,18 +158,46 @@ GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "").strip()
 
 def _area_badge(area_key: str, area_label: str | None = None) -> str:
     """Retorna un badge nativo de Streamlit para el área dada."""
-    color = AREA_BADGE_COLOR.get(area_key.lower(), "gray")
+    core_key = _core_area_key(area_key)
+    color = AREA_BADGE_COLOR.get(core_key, "gray")
     label = area_label or area_key.replace("_", " ").title()
     return f":{color}-badge[{label}]"
 
 
+def _core_area_key(area_key: str | None) -> str:
+    """Mapea claves antiguas y nuevas a las 5 areas principales."""
+    return AREA_COMPATIBILITY.get(str(area_key or "general"), "general")
+
+
 def _area_label(area_key: str | None) -> str:
     """Convierte claves internas de área en etiquetas legibles."""
-    key = area_key or "general"
-    for label, value in AREAS_CATALOGO.items():
-        if value == key:
-            return label
-    return key.replace("_", " ").title()
+    key = _core_area_key(area_key)
+    return AREA_LABEL_BY_KEY.get(key, key.replace("_", " ").title())
+
+
+def _area_filter_keys(area_keys: tuple[str, ...] | list[str]) -> list[str]:
+    """Expande areas principales a claves nuevas y legadas persistidas."""
+    expanded: list[str] = []
+    for key in area_keys:
+        core_key = _core_area_key(key)
+        expanded.extend(AREA_DB_KEYS_BY_CORE.get(core_key, [core_key]))
+    return sorted(set(expanded))
+
+
+def _area_labels_from_query(values: list[str]) -> list[str]:
+    labels: list[str] = []
+    for value in values:
+        if value in AREAS_CATALOGO:
+            labels.append(value)
+            continue
+        label = AREA_LABEL_BY_KEY.get(LEGACY_AREA_LABEL_KEYS.get(value, _core_area_key(value)))
+        if label and label not in labels:
+            labels.append(label)
+    return labels
+
+
+def _area_keys_from_labels(labels: list[str]) -> list[str]:
+    return [AREAS_CATALOGO[label] for label in labels if label in AREAS_CATALOGO]
 
 
 # ===========================================================================
@@ -214,7 +267,7 @@ def _buscar_corpus(
         if fuentes:
             q = q.filter(Noticia.fuente.in_(list(fuentes)))
         if areas_keys:
-            q = q.filter(Noticia.area_matcheada.in_(list(areas_keys)))
+            q = q.filter(Noticia.area_matcheada.in_(_area_filter_keys(list(areas_keys))))
         rows = q.order_by(
             Noticia.selected_score.desc(),
             Noticia.fecha_ingesta.desc(),
@@ -295,7 +348,7 @@ def _sugerir_corpus(
         if fuentes:
             q = q.filter(Noticia.fuente.in_(list(fuentes)))
         if areas_keys:
-            q = q.filter(Noticia.area_matcheada.in_(list(areas_keys)))
+            q = q.filter(Noticia.area_matcheada.in_(_area_filter_keys(list(areas_keys))))
         rows = q.order_by(
             Noticia.selected_score.desc(),
             Noticia.fecha_ingesta.desc(),
@@ -515,7 +568,7 @@ def _render_sidebar(config: dict) -> dict:
             st.caption(f"{len(fuentes_sel)} de {len(FUENTES_CATALOGO)} seleccionadas")
 
         def on_areas_change():
-            st.query_params["areas"] = st.session_state.areas_multi
+            st.query_params["areas"] = _area_keys_from_labels(st.session_state.areas_multi)
             st.session_state["areas_sel"] = st.session_state.areas_multi
 
         areas_sel = st.multiselect(
@@ -563,21 +616,40 @@ def _render_sidebar(config: dict) -> dict:
             st.query_params["fecha"] = fecha_sel.isoformat()
         if orden_sel and st.query_params.get("orden") != orden_sel:
             st.query_params["orden"] = orden_sel
+        area_query_keys = _area_keys_from_labels(areas_sel)
+        if st.query_params.get_all("areas") != area_query_keys:
+            st.query_params["areas"] = area_query_keys
 
-        # --- Estado del sistema ---
+        # --- Estado ---
         st.divider()
-        st.markdown("**System state**")
+        st.markdown("**Estado**")
 
-        # Último análisis
+        stats = _obtener_stats_globales()
+        pct_ia = (
+            stats["con_resumen_ia"] / stats["total_corpus"] * 100
+            if stats["total_corpus"]
+            else 0
+        )
+
+        stat_1, stat_2, stat_3 = st.columns(3)
+        stat_1.metric("Corpus", f"{stats['total_corpus']:,}")
+        stat_2.metric(
+            "24h",
+            f"{stats['noticias_24h']:,}",
+            delta=f"+{stats['noticias_24h']}" if stats["noticias_24h"] else None,
+        )
+        stat_3.metric("IA", f"{stats['con_resumen_ia']:,}")
+
+        st.caption(f"Cobertura IA: {pct_ia:.1f}% del corpus")
+
         macro = _obtener_macro_resumen_hoy()
         if macro and macro.get("fecha_generacion"):
             gen = macro["fecha_generacion"]
             ts_str = gen.strftime("%d/%m %H:%M") if isinstance(gen, datetime) else "—"
             st.caption(f"Último análisis: {ts_str}")
         else:
-            st.caption("Sin análisis hoy")
+            st.caption("Último análisis: —")
 
-        # Estado de actualización automática
         scheduler = st.session_state.get("scheduler")
         if scheduler:
             brief_job = scheduler.get_job("daily_brief")
@@ -588,10 +660,12 @@ def _render_sidebar(config: dict) -> dict:
                 st.caption(f"Próximo brief: {proxima}")
             else:
                 st.caption("Scheduler no activo")
+        else:
+            st.caption("Próximo brief: —")
 
     filtros: dict[str, Any] = {
         "fuentes":    fuentes_sel,
-        "areas_keys": [AREAS_CATALOGO[a] for a in areas_sel],
+        "areas_keys": area_query_keys,
         "fecha":      fecha_sel,
         "orden":      orden_sel or "Puntaje",
     }
@@ -851,11 +925,12 @@ def _filter_and_sort_feed(df: pd.DataFrame, filtros: dict[str, Any]) -> pd.DataF
     filtered = df.copy()
     if filtros.get("fuentes"):
         filtered = filtered[filtered["Fuente"].isin(filtros["fuentes"])]
+    filtered["_area_core"] = filtered["Área"].apply(_core_area_key)
     if filtros.get("areas_keys"):
-        filtered = filtered[filtered["Área"].isin(filtros["areas_keys"])]
+        filtered = filtered[filtered["_area_core"].isin(filtros["areas_keys"])]
 
     if filtered.empty:
-        return filtered
+        return filtered.drop(columns=["_area_core"], errors="ignore")
 
     filtered["_effective_time"] = pd.to_datetime(
         filtered.apply(_effective_feed_timestamp, axis=1),
@@ -868,7 +943,7 @@ def _filter_and_sort_feed(df: pd.DataFrame, filtros: dict[str, Any]) -> pd.DataF
         filtered = filtered[local_dates == selected_date]
 
     if filtered.empty:
-        return filtered.drop(columns=["_effective_time"], errors="ignore")
+        return filtered.drop(columns=["_area_core", "_effective_time"], errors="ignore")
 
     if filtros.get("orden") == "Más reciente":
         sort_columns = ["_effective_time", "Selected Score"]
@@ -881,14 +956,14 @@ def _filter_and_sort_feed(df: pd.DataFrame, filtros: dict[str, Any]) -> pd.DataF
         ascending=ascending,
         na_position="last",
         kind="stable",
-    ).drop(columns=["_effective_time"])
+    ).drop(columns=["_area_core", "_effective_time"])
 
 
 def _render_feed_card(row: dict) -> None:
     """Renderiza una tarjeta individual estilo 'social media post' (componentes nativos)."""
     titulo_limpio = row.get("Label") or row.get("Título", "")
     fuente = row.get("Fuente", "")
-    area_key = row.get("Área", "general")
+    area_key = _core_area_key(row.get("Área", "general"))
     badge = _area_badge(area_key, _area_label(area_key))
     metrica = row.get("Métrica", 0)
     url = row.get("URL", "")
@@ -1051,132 +1126,99 @@ def _render_feed_agrupado(
             for idx, row in df_sorted.iloc[CARDS_TOTALES:].iterrows():
                 _render_feed_card(row.to_dict())
 
-def _render_panel_signals(df_hoy: pd.DataFrame) -> None:
-    """
-    Panel lateral de señales: distribución por área, sentimiento, top entidades.
-    Se muestra como columna derecha en el tab Hoy.
-    """
-    st.markdown("### Señales del día")
-
-    if df_hoy.empty:
-        st.info("Sin datos para generar señales.", icon="ℹ️")
-        return
-
-    tag_scores: Counter = Counter()
-    for _, row in df_hoy.iterrows():
-        score = max(_selected_score_value(row), 1.0)
-        for tag in _parse_tags(row.get("Tags")):
-            tag_scores[tag] += score
-    if tag_scores:
-        with st.container(border=True):
-            st.markdown("**Hot topics**")
-            for tag, value in tag_scores.most_common(5):
-                st.markdown(f"**{tag}** · {value:.0f}")
-
-    # --- Distribución por área ---
-    with st.container(border=True):
-        st.markdown("**Distribución por área**")
-        areas_counts = df_hoy["Área"].value_counts()
-        df_areas = areas_counts.reset_index()
-        df_areas.columns = ["Área", "N"]
-        df_areas["Label"] = df_areas["Área"].apply(_area_label)
-        df_areas = df_areas.sort_values("N", ascending=True)
-
-        fig_areas = px.bar(
-            df_areas,
-            x="N",
-            y="Label",
-            orientation="h",
-            color="N",
-            color_continuous_scale=["#172033", "#2F6FED", "#7BA7FF"],
-            labels={"N": "", "Label": ""},
-        )
-        fig_areas.update_layout(
-            height=max(160, len(df_areas) * 30),
-            margin=dict(l=0, r=0, t=0, b=0),
-            plot_bgcolor="rgba(0,0,0,0)",
-            paper_bgcolor="rgba(0,0,0,0)",
-            coloraxis_showscale=False,
-            xaxis=dict(showticklabels=False, showgrid=False, zeroline=False),
-            yaxis=dict(tickfont=dict(size=11)),
-            showlegend=False,
-            font=dict(color="#E5E7EB"),
-        )
-        st.plotly_chart(fig_areas, use_container_width=True)
-
-    # --- Top entidades/términos ---
-    STOPWORDS_SIGNAL = {
-        "the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for",
-        "of", "with", "by", "from", "is", "it", "this", "that", "are", "was",
-        "be", "as", "its", "not", "has", "have", "had", "de", "la", "el", "en",
-        "y", "los", "las", "un", "una", "con", "por", "para", "se", "al",
-        "github", "hacker", "news", "hn", "stars", "today", "week", "new",
+def _topic_terms(title: Any) -> set[str]:
+    stopwords = {
+        "about", "after", "again", "against", "with", "from", "into", "over",
+        "that", "this", "what", "when", "where", "will", "your", "their",
+        "para", "como", "sobre", "desde", "entre", "esta", "este", "news",
+        "show", "hacker", "github", "openai", "blog", "reuters",
     }
-    counter: Counter = Counter()
-    for titulo in df_hoy.get("Título", pd.Series(dtype=str)):
-        titulo_limpio = _re.sub(r"\[.*?\]|⭐.*|🔺.*|\(\+.*\)", "", str(titulo))
-        words = _re.findall(r"[a-zA-Z]{4,}", titulo_limpio.lower())
-        for w in words:
-            if w not in STOPWORDS_SIGNAL:
-                counter[w] += 1
+    words = _re.findall(r"[A-Za-z][A-Za-z0-9-]{3,}", str(title).lower())
+    return {word for word in words if word not in stopwords}
 
+
+def _build_hot_topic_clusters(df_visible: pd.DataFrame) -> list[dict[str, Any]]:
+    clusters: list[dict[str, Any]] = []
+    if df_visible.empty:
+        return clusters
+
+    rows = df_visible.sort_values(
+        ["Selected Score", "Ingestada"],
+        ascending=[False, False],
+        na_position="last",
+        kind="stable",
+    )
+
+    for _, row in rows.iterrows():
+        title = str(row.get("Label") or row.get("Título") or "").strip()
+        tags = _parse_tags(row.get("Tags"))
+        topic = tags[0] if tags else _area_label(row.get("Área"))
+        terms = _topic_terms(title)
+        timestamp = _effective_feed_timestamp(row)
+        score = max(_selected_score_value(row), 1.0)
+
+        match = None
+        for cluster in clusters:
+            overlap = len(cluster["terms"] & terms)
+            if cluster["topic"] == topic and overlap >= 1:
+                match = cluster
+                break
+            if overlap >= 2:
+                match = cluster
+                break
+
+        if match is None:
+            match = {
+                "title": title,
+                "topic": topic,
+                "terms": set(terms),
+                "sources": set(),
+                "items": 0,
+                "score": 0.0,
+                "newest": pd.NaT,
+            }
+            clusters.append(match)
+
+        match["terms"].update(terms)
+        match["sources"].add(str(row.get("Fuente") or "Fuente"))
+        match["items"] += 1
+        match["score"] += score
+        if not pd.isna(timestamp) and (pd.isna(match["newest"]) or timestamp > match["newest"]):
+            match["newest"] = timestamp
+
+    for cluster in clusters:
+        freshness_boost = 0
+        newest = cluster["newest"]
+        if not pd.isna(newest):
+            age_hours = max(0, (datetime.now(timezone.utc) - newest.to_pydatetime()).total_seconds() / 3600)
+            freshness_boost = max(0, 24 - age_hours)
+        cluster["rank_score"] = cluster["score"] + cluster["items"] * 5 + len(cluster["sources"]) * 10 + freshness_boost
+
+    return sorted(clusters, key=lambda c: c["rank_score"], reverse=True)[:3]
+
+
+def _render_hot_topics_panel(df_visible: pd.DataFrame) -> None:
+    clusters = _build_hot_topic_clusters(df_visible)
     with st.container(border=True):
-        st.markdown("**Top términos**")
-        top_5 = counter.most_common(5)
-        if top_5:
-            for i, (term, freq) in enumerate(top_5, 1):
-                st.markdown(f"`{i}` **{term}** · {freq}×")
-        else:
-            st.caption("Insuficientes datos")
+        st.markdown("**🔥 Hot topics**")
+        if not clusters:
+            st.caption("Sin tendencias para los filtros actuales.")
+            return
 
-
-# ===========================================================================
-# Overview KPIs (con fila de contexto)
-# ===========================================================================
-
-def _render_overview_kpis() -> None:
-    """Fila de 3 KPI cards + fila de contexto."""
-    stats = _obtener_stats_globales()
-
-    st.subheader("Estado operativo")
-    st.caption("Lectura rápida del corpus local y la cobertura de análisis.")
-
-    # Fila principal: 3 métricas
-    col1, col2, col3 = st.columns(3)
-    col1.metric(
-        label="Corpus total",
-        value=f"{stats['total_corpus']:,}",
-        help="Total de artículos persistidos en la base de datos local.",
-    )
-    col2.metric(
-        label="Ingestados 24h",
-        value=f"{stats['noticias_24h']:,}",
-        delta=f"+{stats['noticias_24h']}" if stats["noticias_24h"] else None,
-        delta_color="normal",
-        help="Artículos nuevos incorporados en las últimas 24 horas.",
-    )
-    col3.metric(
-        label="Con resumen IA",
-        value=f"{stats['con_resumen_ia']:,}",
-        help="Artículos con resumen ejecutivo generado por IA.",
-    )
-
-    # Fila de contexto
-    pct_ia = (
-        stats["con_resumen_ia"] / stats["total_corpus"] * 100
-        if stats["total_corpus"]
-        else 0
-    )
-    macro = _obtener_macro_resumen_hoy()
-    ultimo_ts = "—"
-    if macro and macro.get("fecha_generacion"):
-        gen = macro["fecha_generacion"]
-        ultimo_ts = gen.strftime("%d/%m %H:%M") if isinstance(gen, datetime) else "—"
-
-    ctx1, ctx2, ctx3 = st.columns(3)
-    ctx1.caption("Fuentes activas: GitHub Trending · Hacker News · Reuters · GitHub Blog · OpenAI Blog")
-    ctx2.caption(f"Cobertura IA: {pct_ia:.1f}% del corpus")
-    ctx3.caption(f"Último análisis: {ultimo_ts}")
+        for index, cluster in enumerate(clusters, 1):
+            col_rank, col_main, col_meta = st.columns([0.3, 3.7, 1.2])
+            with col_rank:
+                st.markdown(f"**{index}**")
+            with col_main:
+                st.markdown(f"**{cluster['title']}**")
+                st.caption(str(cluster["topic"]))
+            with col_meta:
+                source_count = len(cluster["sources"])
+                source_label = "fuente" if source_count == 1 else "fuentes"
+                freshness = "Sin fecha"
+                if not pd.isna(cluster["newest"]):
+                    freshness = _relative_time(cluster["newest"].to_pydatetime())
+                st.caption(f"{source_count} {source_label} · {freshness}")
 
 
 # ===========================================================================
@@ -1186,33 +1228,26 @@ def _render_overview_kpis() -> None:
 def _render_tab_hoy(filtros: dict, df_feed: pd.DataFrame | None = None) -> None:
     """
     Pestaña Operativa — Command Center layout:
-    KPIs → MacroResumen colapsable → [Feed agrupado | Panel señales]
+    MacroResumen colapsable → Hot topics → Feed agrupado
     """
-    # KPIs
-    _render_overview_kpis()
-    st.divider()
-
     # MacroResumen colapsable
     with st.expander("Brief del día", expanded=True):
         _render_macro_resumen_card()
 
     st.divider()
 
-    # Layout 2 columnas: Feed (75%) + Señales (25%)
     df_hoy = _obtener_noticias_hoy()
     df_visible = df_feed if df_feed is not None else df_hoy
-    col_feed, col_signals = st.columns([3, 1], gap="large")
+    df_hot_topics = _filter_and_sort_feed(df_visible, filtros)
+    _render_hot_topics_panel(df_hot_topics)
 
-    with col_feed:
-        _render_feed_agrupado(
-            df_visible.copy(),
-            filtros,
-            search_active=df_feed is not None,
-        )
+    st.divider()
 
-    with col_signals:
-        df_signals = _filter_and_sort_feed(df_visible, filtros)
-        _render_panel_signals(df_signals)
+    _render_feed_agrupado(
+        df_visible.copy(),
+        filtros,
+        search_active=df_feed is not None,
+    )
 
 
 # ===========================================================================
@@ -1306,7 +1341,7 @@ def main() -> None:
         st.session_state["fuentes_sel"] = qp_fuentes if qp_fuentes else []
 
     if "areas_sel" not in st.session_state:
-        st.session_state["areas_sel"] = qp_areas if qp_areas else []
+        st.session_state["areas_sel"] = _area_labels_from_query(qp_areas) if qp_areas else []
 
     if "fecha_sel" not in st.session_state:
         st.session_state["fecha_sel"] = _parse_filter_date(qp_fecha)

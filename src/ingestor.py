@@ -109,14 +109,14 @@ def _metricas_vacias(nombre: str) -> dict:
 
 def _area_desde_categoria_global(category: str) -> str:
     mapping = {
-        "AI": "inteligencia_artificial",
-        "Cybersecurity": "ciberseguridad",
-        "Developer Tools": "arquitectura_software",
-        "Infrastructure": "semiconductores",
-        "Regulation": "startups_tecnologia",
-        "IT": "ciencias_computacion",
+        "AI": "ai_agents",
+        "Cybersecurity": "cybersecurity",
+        "Developer Tools": "developer_tools",
+        "Infrastructure": "infrastructure_cloud",
+        "Regulation": "developer_tools",
+        "IT": "developer_tools",
     }
-    return mapping.get(category or "IT", "ciencias_computacion")
+    return mapping.get(category or "IT", "developer_tools")
 
 
 def _fecha_global_utc(value: str | None) -> datetime | None:
@@ -275,7 +275,7 @@ def _worker_github(
                 full_name, f"{descripcion} {language}", areas_interes
             )
             if not es_rel:
-                area = "arquitectura_software"  # trending siempre relevante
+                area = "developer_tools"  # trending siempre relevante
 
             # Título enriquecido con ambas métricas de estrellas
             titulo = (
@@ -391,7 +391,7 @@ def _worker_hn(
 
             es_rel, area = _es_relevante(titulo, texto, areas_interes)
             if not es_rel:
-                area = "ciencias_computacion"
+                area = "developer_tools"
 
             id_hash = _calcular_hash(titulo, url)
             noticias.append(Noticia(
@@ -479,7 +479,7 @@ def _worker_hn_algolia(
 
             es_rel, area = _es_relevante(titulo, texto, areas_interes)
             if not es_rel:
-                area = "ciencias_computacion"
+                area = "developer_tools"
 
             id_hash = _calcular_hash(titulo, url_hit)
             noticias.append(Noticia(

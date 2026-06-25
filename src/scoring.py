@@ -20,15 +20,29 @@ WEIGHTS = {
 }
 
 AREA_SCORES = {
-    "inteligencia_artificial": 92,
-    "ciberseguridad": 86,
-    "arquitectura_software": 78,
-    "cloud_computing": 76,
-    "data_engineering": 74,
-    "semiconductores": 70,
-    "ciencias_computacion": 66,
-    "startups_tecnologia": 48,
+    "ai_agents": 94,
+    "cybersecurity": 86,
+    "developer_tools": 78,
+    "infrastructure_cloud": 76,
+    "chips_hardware": 72,
     "general": 35,
+}
+
+AREA_COMPATIBILITY = {
+    "inteligencia_artificial": "ai_agents",
+    "ai_agents": "ai_agents",
+    "arquitectura_software": "developer_tools",
+    "ciencias_computacion": "developer_tools",
+    "developer_tools": "developer_tools",
+    "ciberseguridad": "cybersecurity",
+    "cybersecurity": "cybersecurity",
+    "cloud_computing": "infrastructure_cloud",
+    "data_engineering": "infrastructure_cloud",
+    "infrastructure_cloud": "infrastructure_cloud",
+    "semiconductores": "chips_hardware",
+    "chips_hardware": "chips_hardware",
+    "startups_tecnologia": "general",
+    "general": "general",
 }
 
 SOURCE_CREDIBILITY = {
@@ -68,6 +82,10 @@ TAG_KEYWORDS = {
     "Regulation": (
         "regulation", "regulator", "law", "export control", "blacklist",
         "entity list", "eu", "government", "antitrust",
+    ),
+    "Startup/Product": (
+        "startup", "funding", "venture capital", "ipo", "acquisition",
+        "product", "launch", "valuation", "fintech",
     ),
 }
 
@@ -113,6 +131,10 @@ def _parse_period_stars(title: str) -> int:
         return 0
 
 
+def _core_area(area: str | None) -> str:
+    return AREA_COMPATIBILITY.get(str(area or "general"), "general")
+
+
 def _age_hours(item: Any, now: datetime) -> float:
     dt = _get(item, "fecha_publicacion") or _get(item, "published_at") or _get(item, "fecha_ingesta")
     if isinstance(dt, str):
@@ -153,21 +175,20 @@ def _tags_for(text: str, area: str | None) -> list[str]:
             tags.append(tag)
 
     area_tags = {
-        "inteligencia_artificial": "AI",
-        "ciberseguridad": "Cybersecurity",
-        "arquitectura_software": "Developer Tools",
-        "cloud_computing": "Cloud",
-        "data_engineering": "Data",
-        "semiconductores": "Semiconductors",
+        "ai_agents": "AI",
+        "cybersecurity": "Cybersecurity",
+        "developer_tools": "Developer Tools",
+        "infrastructure_cloud": "Cloud",
+        "chips_hardware": "Semiconductors",
     }
-    area_tag = area_tags.get(area or "")
+    area_tag = area_tags.get(_core_area(area))
     if area_tag and area_tag not in tags:
         tags.insert(0, area_tag)
     return tags[:5]
 
 
 def _topic_score(text: str, area: str | None, tags: list[str]) -> float:
-    score = float(AREA_SCORES.get(area or "general", 35))
+    score = float(AREA_SCORES.get(_core_area(area), 35))
     if "AI" in tags:
         score += 12
     if "Cybersecurity" in tags:

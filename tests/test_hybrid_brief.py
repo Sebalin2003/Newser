@@ -626,6 +626,18 @@ class TestCorpusSearch(unittest.TestCase):
 
         self.assertEqual(self.app._sugerir_corpus("a"), [])
 
+    def test_search_area_filter_maps_core_area_to_legacy_rows(self) -> None:
+        self._add_article("architecture", "Compiler framework", "", "", "GitHub Blog", "arquitectura_software", 80)
+        self._add_article("computer-science", "Compiler theory", "", "", "Hacker News", "ciencias_computacion", 82)
+        self._add_article("chips", "Compiler hardware", "", "", "Reuters", "semiconductores", 90)
+
+        result = self.app._buscar_corpus(
+            "compiler",
+            areas_keys=("developer_tools",),
+        )
+
+        self.assertEqual(result["id"].tolist(), ["computer-science", "architecture"])
+
 
 class TestSidebarFilters(unittest.TestCase):
     def setUp(self) -> None:
@@ -691,6 +703,41 @@ class TestSidebarFilters(unittest.TestCase):
 
         self.assertEqual(score_sorted["id"].tolist(), ["high-score", "recent"])
         self.assertEqual(recent_sorted["id"].tolist(), ["recent", "high-score"])
+
+    def test_core_area_mapping_and_labels_are_stable(self) -> None:
+        self.assertEqual(self.app._core_area_key("inteligencia_artificial"), "ai_agents")
+        self.assertEqual(self.app._core_area_key("arquitectura_software"), "developer_tools")
+        self.assertEqual(self.app._core_area_key("ciencias_computacion"), "developer_tools")
+        self.assertEqual(self.app._core_area_key("data_engineering"), "infrastructure_cloud")
+        self.assertEqual(self.app._core_area_key("semiconductores"), "chips_hardware")
+        self.assertEqual(self.app._area_label("inteligencia_artificial"), "AI & Agents")
+
+    def test_feed_filter_uses_core_area_for_legacy_rows(self) -> None:
+        df = self.app.pd.DataFrame([
+            {
+                "id": "legacy-dev",
+                "Fuente": "Hacker News",
+                "Área": "ciencias_computacion",
+                "Publicada": "2026-06-24T10:00:00Z",
+                "Ingestada": "2026-06-24T10:05:00Z",
+                "Selected Score": 81,
+            },
+            {
+                "id": "legacy-chip",
+                "Fuente": "Reuters",
+                "Área": "semiconductores",
+                "Publicada": "2026-06-24T11:00:00Z",
+                "Ingestada": "2026-06-24T11:05:00Z",
+                "Selected Score": 90,
+            },
+        ])
+
+        result = self.app._filter_and_sort_feed(
+            df,
+            {"areas_keys": ["developer_tools"], "fecha": date(2026, 6, 24), "orden": "Puntaje"},
+        )
+
+        self.assertEqual(result["id"].tolist(), ["legacy-dev"])
 
 
 class TestGlobalNewsIngestion(unittest.TestCase):
@@ -769,7 +816,7 @@ class TestGlobalNewsIngestion(unittest.TestCase):
         noticias = _noticias_desde_global_items([item for item in items if item is not None])
 
         self.assertEqual([n.fuente for n in noticias], ["Reuters", "GitHub Blog", "OpenAI Blog"])
-        self.assertEqual(noticias[0].area_matcheada, "ciberseguridad")
+        self.assertEqual(noticias[0].area_matcheada, "cybersecurity")
         self.assertEqual(noticias[0].fecha_publicacion, real_datetime(2026, 6, 19, 12, 34, 56))
         self.assertIsNone(noticias[1].fecha_publicacion)
         self.assertTrue(noticias[1].titulo.startswith("[Global]"))
