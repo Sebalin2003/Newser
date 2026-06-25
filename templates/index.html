@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Newser</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <aside class="sidebar">
+    <div class="sidebar-top">
+      <div class="brand">
+        <img src="/assets/newser-lockup.png" alt="Newser" onerror="this.style.display='none'">
+        <p class="brand-tagline">IT News Trend Analyzer</p>
+      </div>
+      <button id="sidebar-toggle" class="sidebar-toggle" type="button" aria-label="Collapse sidebar" aria-expanded="true">
+        <span aria-hidden="true"></span>
+      </button>
+    </div>
+
+    <nav class="sidebar-section mode-nav" aria-label="Main navigation">
+      <div class="sidebar-section-head">
+        <p class="eyebrow">Workspace</p>
+        <span>2 modes</span>
+      </div>
+      <button type="button" class="nav-button active" data-view-target="today" data-short="TU" aria-label="Today’s Updates">
+        <span>
+          <strong>Today&rsquo;s Updates</strong>
+          <small>Live articles, repositories, topics, and search.</small>
+        </span>
+      </button>
+      <button type="button" class="nav-button" data-view-target="briefs" data-short="DB" aria-label="Daily Briefs">
+        <span>
+          <strong>Daily Briefs</strong>
+          <small>Today’s executive summary and previous 7 days.</small>
+        </span>
+      </button>
+    </nav>
+
+    <form id="filters" class="filters">
+      <div class="sidebar-section feed-controls">
+        <div class="sidebar-section-head">
+          <p class="eyebrow">Feed controls</p>
+          <span>Today</span>
+        </div>
+
+        <label class="field">
+          <span>Date</span>
+          <input type="date" name="fecha" min="{{ min_date }}" max="{{ max_date }}" value="{{ max_date }}">
+        </label>
+
+        <div class="multi-select" data-multiselect>
+          <button class="multi-select-button" type="button" aria-haspopup="listbox" aria-expanded="false">
+            <span data-label>All sources</span>
+            <span class="chevron" aria-hidden="true"></span>
+          </button>
+          <div class="multi-select-menu" role="listbox">
+            <label class="check select-all">
+              <input type="checkbox" data-select-all checked>
+              <span>Select all</span>
+            </label>
+          {% for source in sources %}
+            <label class="check">
+              <input type="checkbox" name="fuentes" value="{{ source }}" checked>
+              <span>{{ source }}</span>
+            </label>
+          {% endfor %}
+          </div>
+        </div>
+
+        <div class="multi-select" data-multiselect>
+          <button class="multi-select-button" type="button" aria-haspopup="listbox" aria-expanded="false">
+            <span data-label>All areas</span>
+            <span class="chevron" aria-hidden="true"></span>
+          </button>
+          <div class="multi-select-menu" role="listbox">
+            <label class="check select-all">
+              <input type="checkbox" data-select-all checked>
+              <span>Select all</span>
+            </label>
+          {% for label, key in areas.items() %}
+            <label class="check">
+              <input type="checkbox" name="areas" value="{{ key }}" checked>
+              <span>{{ label }}</span>
+            </label>
+          {% endfor %}
+          </div>
+        </div>
+
+        <fieldset class="segmented" aria-label="Order">
+          <legend>Order</legend>
+          <label>
+            <input type="radio" name="orden" value="Puntaje" checked>
+            <span>Score</span>
+          </label>
+          <label>
+            <input type="radio" name="orden" value="Mas reciente">
+            <span>Most recent</span>
+          </label>
+        </fieldset>
+      </div>
+
+      <div class="sidebar-section system-section">
+        <div class="sidebar-section-head">
+          <p class="eyebrow">System status</p>
+          <span>Auto</span>
+        </div>
+        <button id="system-status-button" class="system-status-button" type="button" data-view-target="system">
+          <span>
+            <strong>Open System Status</strong>
+            <small>Health, metrics, and source coverage.</small>
+          </span>
+        </button>
+        <div id="refresh-status" class="refresh-status">Automatic updates enabled.</div>
+      </div>
+    </form>
+  </aside>
+
+  <main class="workspace">
+    <header class="topbar">
+      <div>
+        <h2>Today&rsquo;s Updates</h2>
+      </div>
+      <div class="search today-only">
+        <input id="search" type="text" placeholder="Search corpus" autocomplete="off">
+        <button id="clear-search" type="button" title="Clear search">x</button>
+        <div id="suggestions" class="suggestions" hidden></div>
+      </div>
+    </header>
+
+    <section id="status" class="status" role="status" aria-live="polite"></section>
+
+    <section class="panel overview-only" id="topics-panel">
+      <div class="section-title compact-title">
+        <h3>Hot topics</h3>
+      </div>
+      <div id="hot-topics" class="topic-list"></div>
+    </section>
+
+    <section class="feed-block">
+      <div class="feed-head">
+        <div>
+          <h3 id="feed-title">Trends</h3>
+        </div>
+        <p id="feed-meta"></p>
+      </div>
+      <div id="feed" class="feed"></div>
+    </section>
+
+    <section id="daily-briefs" class="daily-briefs archive-workspace" hidden>
+      <div class="archive-hero">
+        <div>
+          <p class="eyebrow">Brief mode</p>
+          <h3>Daily Briefs</h3>
+          <p>Today’s executive summary and stored daily briefs from the previous 7 days. Historical missing days are omitted.</p>
+        </div>
+        <div class="archive-window">
+          <strong>7 days</strong>
+          <span>Newest first</span>
+        </div>
+      </div>
+      <section class="panel" id="brief">
+        <div class="section-title">
+          <p class="eyebrow">Today</p>
+          <h3>Executive summary</h3>
+        </div>
+        <div class="empty">Loading brief...</div>
+      </section>
+      <div class="section-title archive-title">
+        <p class="eyebrow">Archive</p>
+        <h3>Previous daily briefs</h3>
+      </div>
+      <div id="daily-briefs-list" class="daily-brief-list"></div>
+    </section>
+
+    <section id="system-status" class="system-status-view" hidden>
+      <div class="system-hero">
+        <div>
+          <p class="eyebrow">System Status</p>
+          <h3>Operations overview</h3>
+          <p>Automatic update health, corpus coverage, and source distribution.</p>
+        </div>
+        <div id="system-health-badge" class="system-health-badge">Checking...</div>
+      </div>
+
+      <section class="panel">
+        <div class="section-title">
+          <p class="eyebrow">Health</p>
+          <h3>Automatic updates</h3>
+        </div>
+        <div id="system-health" class="system-health-grid"></div>
+      </section>
+
+      <section class="panel">
+        <div class="section-title">
+          <p class="eyebrow">Metrics</p>
+          <h3>Corpus summary</h3>
+        </div>
+        <div id="system-metrics" class="stats"></div>
+      </section>
+
+      <section class="panel">
+        <div class="section-title">
+          <p class="eyebrow">Sources</p>
+          <h3>Source breakdown</h3>
+        </div>
+        <div id="source-breakdown" class="source-breakdown"></div>
+      </section>
+    </section>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

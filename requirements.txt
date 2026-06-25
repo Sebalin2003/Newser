@@ -29,6 +29,9 @@ google-genai>=1.0.0          # Motor IA: Gemini
 streamlit>=1.57.0
 streamlit-autorefresh>=1.0.1
 plotly>=5.18.0
+fastapi>=0.138.0
+uvicorn>=0.30.0
+jinja2>=3.1.0
 
 sentence-transformers>=2.0.0
 torch>=2.0.0
