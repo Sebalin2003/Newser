@@ -101,6 +101,8 @@ class Noticia(Base):
     selection_reason: str = Column(Text, nullable=True)
     scored_at: datetime = Column(DateTime, nullable=True)
     score_version: str = Column(String(64), nullable=True)
+    is_favorite: int = Column(Integer, nullable=False, default=0)
+    favorited_at: datetime = Column(DateTime, nullable=True)
 
     def __repr__(self) -> str:
         return f"<Noticia id={self.id[:8]}... titulo='{self.titulo[:40]}'>"
@@ -212,7 +214,11 @@ def limpiar_datos_antiguos(dias_retencion: int = 30) -> dict[str, int]:
     try:
         with engine.begin() as conn:
             r1 = conn.execute(
-                text(f"DELETE FROM noticias WHERE fecha_ingesta < datetime('now', '-{dias_retencion} days')")
+                text(
+                    "DELETE FROM noticias "
+                    f"WHERE fecha_ingesta < datetime('now', '-{dias_retencion} days') "
+                    "AND COALESCE(is_favorite, 0) = 0"
+                )
             )
             resultado["noticias_eliminadas"] = r1.rowcount
 
@@ -263,6 +269,8 @@ def migrar_schema() -> None:
             "selection_reason": "ALTER TABLE noticias ADD COLUMN selection_reason TEXT",
             "scored_at": "ALTER TABLE noticias ADD COLUMN scored_at DATETIME",
             "score_version": "ALTER TABLE noticias ADD COLUMN score_version VARCHAR(64)",
+            "is_favorite": "ALTER TABLE noticias ADD COLUMN is_favorite INTEGER NOT NULL DEFAULT 0",
+            "favorited_at": "ALTER TABLE noticias ADD COLUMN favorited_at DATETIME",
         }
 
         with engine.begin() as conn:

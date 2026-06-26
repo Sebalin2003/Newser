@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Newser</title>
-  <link rel="stylesheet" href="/static/app.css">
+  <link rel="stylesheet" href="/static/app.css?v=selected-date-title-v1">
 </head>
 <body>
   <aside class="sidebar">
@@ -21,18 +21,47 @@
     <nav class="sidebar-section mode-nav" aria-label="Main navigation">
       <div class="sidebar-section-head">
         <p class="eyebrow">Workspace</p>
-        <span>2 modes</span>
+        <span>3 modes</span>
       </div>
-      <button type="button" class="nav-button active" data-view-target="today" data-short="TU" aria-label="Today’s Updates">
+      <button type="button" class="nav-button active" data-view-target="today" aria-label="Today’s Updates">
+        <span class="nav-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" focusable="false">
+            <path d="M20 12a8 8 0 0 1-13.7 5.65"></path>
+            <path d="M4 12A8 8 0 0 1 17.7 6.35"></path>
+            <path d="M17.7 3.8v2.55h-2.55"></path>
+            <path d="M6.3 20.2v-2.55h2.55"></path>
+          </svg>
+        </span>
         <span>
           <strong>Today&rsquo;s Updates</strong>
           <small>Live articles, repositories, topics, and search.</small>
         </span>
       </button>
-      <button type="button" class="nav-button" data-view-target="briefs" data-short="DB" aria-label="Daily Briefs">
+      <button type="button" class="nav-button" data-view-target="briefs" aria-label="Daily Briefs">
+        <span class="nav-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" focusable="false">
+            <path d="M7 3.5h7l3 3v14H7z"></path>
+            <path d="M14 3.5v3h3"></path>
+            <path d="M9.5 10.25l1 1 2-2"></path>
+            <path d="M14.25 10.5h1.75"></path>
+            <path d="M9.5 15.25l1 1 2-2"></path>
+            <path d="M14.25 15.5h1.75"></path>
+          </svg>
+        </span>
         <span>
           <strong>Daily Briefs</strong>
           <small>Today’s executive summary and previous 7 days.</small>
+        </span>
+      </button>
+      <button type="button" class="nav-button" data-view-target="favorites" aria-label="Favorites">
+        <span class="nav-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" focusable="false">
+            <path d="M12 20.2 10.65 19C5.85 14.65 3 12.05 3 8.85 3 6.25 5.05 4.2 7.65 4.2c1.45 0 2.85.68 3.75 1.75h1.2c.9-1.07 2.3-1.75 3.75-1.75 2.6 0 4.65 2.05 4.65 4.65 0 3.2-2.85 5.8-7.65 10.15z"></path>
+          </svg>
+        </span>
+        <span>
+          <strong>Favorites</strong>
+          <small>Saved articles and repositories.</small>
         </span>
       </button>
     </nav>
@@ -119,7 +148,10 @@
   <main class="workspace">
     <header class="topbar">
       <div>
-        <h2>Today&rsquo;s Updates</h2>
+        <h2>
+          <span id="topbar-title-main">Today&rsquo;s Updates</span>
+          <span id="topbar-date" class="topbar-date" hidden></span>
+        </h2>
       </div>
       <div class="search today-only">
         <input id="search" type="text" placeholder="Search corpus" autocomplete="off">
@@ -145,6 +177,14 @@
         <p id="feed-meta"></p>
       </div>
       <div id="feed" class="feed"></div>
+    </section>
+
+    <section id="favorites" class="favorites-view" hidden>
+      <div class="section-title favorites-title">
+        <h3>Saved articles</h3>
+        <p>Articles and repositories you marked for follow-up.</p>
+      </div>
+      <div id="favorites-feed" class="favorites-feed-list"></div>
     </section>
 
     <section id="daily-briefs" class="daily-briefs archive-workspace" hidden>
@@ -209,6 +249,6 @@
     </section>
   </main>
 
-  <script src="/static/app.js"></script>
+  <script src="/static/app.js?v=selected-date-title-v1"></script>
 </body>
 </html>

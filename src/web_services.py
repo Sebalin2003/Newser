@@ -6,6 +6,7 @@ import json
 import os
 import re
 import threading
+from collections import Counter
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -17,12 +18,22 @@ from sqlalchemy import or_
 
 from src.database import MacroResumen, Noticia, get_session, init_db, limpiar_datos_antiguos
 
+try:
+    from sklearn.feature_extraction.text import TfidfVectorizer
+    from sklearn.metrics.pairwise import cosine_similarity
+except Exception:  # pragma: no cover - dependency is optional at runtime
+    TfidfVectorizer = None
+    cosine_similarity = None
+
 load_dotenv()
 
 CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.yaml"
 BRIEF_TIMEZONE = ZoneInfo("America/Argentina/Buenos_Aires")
 FILTER_WINDOW_DAYS = 7
 FEED_REFRESH_INTERVAL = timedelta(minutes=30)
+HOT_TOPIC_MIN_SOURCES = 3
+HOT_TOPIC_SUPPORT_LIMIT = 5
+HOT_TOPIC_SIMILARITY_THRESHOLD = 0.42
 _refresh_lock = threading.Lock()
 _refresh_state: dict[str, Any] = {
     "last_started_at": None,
@@ -236,6 +247,8 @@ def _serialize_article(n: Noticia, config: dict[str, Any]) -> dict[str, Any]:
         "ranking": n.ranking,
         "metric": _metric_from_title(title, str(n.fuente or "")),
         "selection_reason": score["selection_reason"],
+        "is_favorite": bool(n.is_favorite),
+        "favorited_at": _iso(n.favorited_at),
     }
 
 
@@ -297,7 +310,7 @@ def get_feed(
         "count": len(items),
         "fecha": selected_date.isoformat(),
         "orden": orden,
-        "hot_topics": build_hot_topics(items),
+        "hot_topics": get_hot_topics(selected_date),
     }
 
 
@@ -341,6 +354,45 @@ def get_past_daily_briefs(today: date | None = None) -> dict[str, list[dict[str,
         )
         items = [_serialize_brief(row) for row in rows]
     return {"items": items}
+
+
+def get_favorites() -> dict[str, Any]:
+    config = load_config()
+    with get_session() as session:
+        rows = (
+            session.query(Noticia)
+            .filter(Noticia.is_favorite == 1)
+            .order_by(Noticia.favorited_at.desc(), Noticia.fecha_ingesta.desc())
+            .all()
+        )
+        items = [_serialize_article(row, config) for row in rows]
+    return {"items": items, "count": len(items)}
+
+
+def mark_favorite(article_id: str) -> dict[str, Any]:
+    with get_session() as session:
+        article = session.query(Noticia).filter(Noticia.id == article_id).first()
+        if not article:
+            return {"ok": False, "reason": "Article not found."}
+        if not article.is_favorite:
+            article.is_favorite = 1
+            article.favorited_at = datetime.now(timezone.utc)
+        return {
+            "ok": True,
+            "id": str(article.id),
+            "is_favorite": bool(article.is_favorite),
+            "favorited_at": _iso(article.favorited_at),
+        }
+
+
+def remove_favorite(article_id: str) -> dict[str, Any]:
+    with get_session() as session:
+        article = session.query(Noticia).filter(Noticia.id == article_id).first()
+        if not article:
+            return {"ok": False, "reason": "Article not found."}
+        article.is_favorite = 0
+        article.favorited_at = None
+        return {"ok": True, "id": str(article.id), "is_favorite": False, "favorited_at": None}
 
 
 def get_stats() -> dict[str, Any]:
@@ -469,25 +521,194 @@ def get_refresh_status(next_check_at: datetime | None = None) -> dict[str, Any]:
     }
 
 
-def build_hot_topics(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    topics: dict[str, dict[str, Any]] = {}
-    for item in items:
-        topic = item["tags"][0] if item.get("tags") else item.get("area_label") or "General"
-        current = topics.setdefault(
-            topic,
-            {"topic": topic, "title": item.get("label") or item.get("titulo"), "items": 0, "sources": set(), "score": 0.0},
+TOPIC_STOPWORDS = {
+    "about",
+    "after",
+    "agent",
+    "agents",
+    "analysis",
+    "article",
+    "blog",
+    "build",
+    "could",
+    "data",
+    "developer",
+    "from",
+    "global",
+    "github",
+    "hacker",
+    "launch",
+    "model",
+    "news",
+    "open",
+    "release",
+    "reuters",
+    "says",
+    "source",
+    "story",
+    "that",
+    "this",
+    "tools",
+    "with",
+}
+
+TOPIC_LABELS = {
+    "openai": "OpenAI",
+    "github": "GitHub",
+    "anthropic": "Anthropic",
+    "nvidia": "Nvidia",
+    "microsoft": "Microsoft",
+    "google": "Google",
+    "apple": "Apple",
+    "meta": "Meta",
+    "security": "Security",
+    "cybersecurity": "Security",
+    "breach": "Security",
+}
+
+
+def _topic_text(item: dict[str, Any]) -> str:
+    return " ".join(
+        str(value or "")
+        for value in (
+            item.get("label") or item.get("titulo"),
+            item.get("descripcion"),
+            " ".join(item.get("tags") or []),
         )
-        current["items"] += 1
-        current["sources"].add(item.get("fuente") or "Fuente")
-        current["score"] += float(item.get("selected_score") or 0)
-    ranked = sorted(topics.values(), key=lambda value: (value["score"], value["items"]), reverse=True)[:3]
-    return [
-        {
-            "topic": topic["topic"],
-            "title": topic["title"],
-            "items": topic["items"],
-            "source_count": len(topic["sources"]),
-            "score": round(topic["score"], 1),
-        }
-        for topic in ranked
-    ]
+    )
+
+
+def _topic_tokens(item: dict[str, Any]) -> set[str]:
+    text = _topic_text(item).lower()
+    tokens = set(re.findall(r"[a-z][a-z0-9\-]{2,}", text))
+    return {token for token in tokens if token not in TOPIC_STOPWORDS}
+
+
+def _topic_label(items: list[dict[str, Any]], representative: dict[str, Any]) -> str:
+    counts: Counter[str] = Counter()
+    for item in items:
+        counts.update(_topic_tokens(item))
+    for token, _count in counts.most_common():
+        if token in TOPIC_LABELS:
+            return TOPIC_LABELS[token]
+    if counts:
+        token = counts.most_common(1)[0][0]
+        return token.replace("-", " ").title()
+    tags = representative.get("tags") or []
+    return str(tags[0] if tags else representative.get("area_label") or "General")
+
+
+def _shared_topic_overlap(left: dict[str, Any], right: dict[str, Any]) -> int:
+    return len(_topic_tokens(left) & _topic_tokens(right))
+
+
+def _cluster_unassigned_topics(items: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
+    if len(items) < 2:
+        return [[item] for item in items]
+    if TfidfVectorizer is None or cosine_similarity is None:
+        clusters: dict[str, list[dict[str, Any]]] = {}
+        for item in items:
+            tokens = sorted(_topic_tokens(item))
+            key = " ".join(tokens[:2]) or str(item.get("id"))
+            clusters.setdefault(key, []).append(item)
+        return list(clusters.values())
+
+    texts = [_topic_text(item) for item in items]
+    try:
+        vectors = TfidfVectorizer(stop_words="english", ngram_range=(1, 2), min_df=1).fit_transform(texts)
+        similarities = cosine_similarity(vectors)
+    except ValueError:
+        return [[item] for item in items]
+
+    clusters: list[list[int]] = []
+    assignments = [-1] * len(items)
+    for index, item in enumerate(items):
+        best_cluster = -1
+        best_similarity = HOT_TOPIC_SIMILARITY_THRESHOLD
+        for cluster_index, members in enumerate(clusters):
+            average_similarity = sum(float(similarities[index][member]) for member in members) / len(members)
+            overlap = max(_shared_topic_overlap(item, items[member]) for member in members)
+            if average_similarity >= best_similarity or overlap >= 3:
+                best_similarity = average_similarity
+                best_cluster = cluster_index
+        if best_cluster >= 0:
+            clusters[best_cluster].append(index)
+            assignments[index] = best_cluster
+        else:
+            clusters.append([index])
+            assignments[index] = len(clusters) - 1
+    return [[items[index] for index in cluster] for cluster in clusters]
+
+
+def _serialize_hot_topic(items: list[dict[str, Any]]) -> dict[str, Any] | None:
+    sources = sorted({str(item.get("fuente") or "Fuente") for item in items})
+    if len(sources) < HOT_TOPIC_MIN_SOURCES:
+        return None
+    sorted_items = sorted(
+        items,
+        key=lambda item: (float(item.get("selected_score") or 0), (_effective_datetime(item) or datetime.min.replace(tzinfo=timezone.utc)).timestamp()),
+        reverse=True,
+    )
+    representative = sorted_items[0]
+    title = representative.get("label") or representative.get("titulo") or "Untitled"
+    return {
+        "topic": _topic_label(items, representative),
+        "title": title,
+        "representative_id": representative.get("id"),
+        "items": len(items),
+        "source_count": len(sources),
+        "sources": sources,
+        "score": round(sum(float(item.get("selected_score") or 0) for item in items), 1),
+        "supporting_items": [
+            {
+                "id": item.get("id"),
+                "title": item.get("label") or item.get("titulo") or "Untitled",
+                "source": item.get("fuente") or "Fuente",
+                "score": float(item.get("selected_score") or 0),
+                "url": item.get("url") or "",
+            }
+            for item in sorted_items[:HOT_TOPIC_SUPPORT_LIMIT]
+        ],
+        "_newest": max((_effective_datetime(item) for item in items), default=None),
+    }
+
+
+def get_hot_topics(selected_date: date) -> list[dict[str, Any]]:
+    config = load_config()
+    cutoff = datetime.now(timezone.utc) - timedelta(days=FILTER_WINDOW_DAYS)
+    with get_session() as session:
+        rows = (
+            session.query(Noticia)
+            .filter(Noticia.fecha_ingesta >= cutoff)
+            .order_by(Noticia.fecha_ingesta.desc())
+            .limit(500)
+            .all()
+        )
+        items = [_serialize_article(row, config) | {"cluster_id": row.cluster_id} for row in rows]
+
+    day_items = [item for item in items if _matches_date(item, selected_date)]
+    grouped: list[list[dict[str, Any]]] = []
+    cluster_groups: dict[int, list[dict[str, Any]]] = {}
+    unassigned: list[dict[str, Any]] = []
+    for item in day_items:
+        cluster_id = item.get("cluster_id")
+        if cluster_id is None:
+            unassigned.append(item)
+        else:
+            cluster_groups.setdefault(int(cluster_id), []).append(item)
+    grouped.extend(cluster_groups.values())
+    grouped.extend(_cluster_unassigned_topics(unassigned))
+
+    topics = [topic for group in grouped if (topic := _serialize_hot_topic(group))]
+    topics.sort(
+        key=lambda topic: (
+            topic["source_count"],
+            float(topic["score"]),
+            int(topic["items"]),
+            topic["_newest"].timestamp() if topic.get("_newest") else 0,
+        ),
+        reverse=True,
+    )
+    for topic in topics:
+        topic.pop("_newest", None)
+    return topics[:3]

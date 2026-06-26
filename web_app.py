@@ -88,6 +88,11 @@ def api_daily_briefs():
     return web_services.get_past_daily_briefs()
 
 
+@app.get("/api/favorites")
+def api_favorites():
+    return web_services.get_favorites()
+
+
 @app.get("/api/stats")
 def api_stats():
     return web_services.get_stats()
@@ -117,6 +122,20 @@ def api_search_suggestions(
 def api_generate_summary(article_id: str):
     result = web_services.generate_summary(article_id)
     status_code = 200 if result.get("ok") else 400
+    return JSONResponse(result, status_code=status_code)
+
+
+@app.post("/api/articles/{article_id}/favorite")
+def api_mark_favorite(article_id: str):
+    result = web_services.mark_favorite(article_id)
+    status_code = 200 if result.get("ok") else 404
+    return JSONResponse(result, status_code=status_code)
+
+
+@app.delete("/api/articles/{article_id}/favorite")
+def api_remove_favorite(article_id: str):
+    result = web_services.remove_favorite(article_id)
+    status_code = 200 if result.get("ok") else 404
     return JSONResponse(result, status_code=status_code)
 
 

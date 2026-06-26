@@ -11,6 +11,8 @@ const feed = document.querySelector("#feed");
 const feedTitle = document.querySelector("#feed-title");
 const feedMeta = document.querySelector("#feed-meta");
 const topbarTitle = document.querySelector(".topbar h2");
+const topbarTitleMain = document.querySelector("#topbar-title-main");
+const topbarDate = document.querySelector("#topbar-date");
 const stats = document.querySelector("#stats");
 const brief = document.querySelector("#brief");
 const hotTopics = document.querySelector("#hot-topics");
@@ -22,6 +24,8 @@ const refreshStatus = document.querySelector("#refresh-status");
 const overviewSections = document.querySelectorAll(".overview-only");
 const dailyBriefs = document.querySelector("#daily-briefs");
 const dailyBriefsList = document.querySelector("#daily-briefs-list");
+const favorites = document.querySelector("#favorites");
+const favoritesFeed = document.querySelector("#favorites-feed");
 const systemStatus = document.querySelector("#system-status");
 const systemHealthBadge = document.querySelector("#system-health-badge");
 const systemHealth = document.querySelector("#system-health");
@@ -92,6 +96,45 @@ function formatDate(value) {
   });
 }
 
+function formatFeedDate(value) {
+  if (!value) return "";
+  const parts = value.split("-").map((part) => Number.parseInt(part, 10));
+  if (parts.length !== 3 || parts.some(Number.isNaN)) return "";
+  const date = new Date(parts[0], parts[1] - 1, parts[2]);
+  return date.toLocaleDateString([], {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  });
+}
+
+function updateTopbarTitle() {
+  const briefsActive = state.view === "briefs";
+  const favoritesActive = state.view === "favorites";
+  const systemActive = state.view === "system";
+  const title = briefsActive
+    ? "Daily Briefs"
+    : favoritesActive
+      ? "Favorites"
+      : systemActive
+        ? "System Status"
+        : "Today\u2019s Updates";
+
+  if (topbarTitleMain) {
+    topbarTitleMain.textContent = title;
+  } else {
+    topbarTitle.textContent = title;
+  }
+
+  if (!topbarDate) return;
+  const dateInput = filters.querySelector('input[name="fecha"]');
+  const selectedDate = dateInput?.value || "";
+  const latestDate = dateInput?.max || "";
+  const showDate = state.view === "today" && selectedDate && latestDate && selectedDate !== latestDate;
+  topbarDate.hidden = !showDate;
+  topbarDate.textContent = showDate ? formatFeedDate(selectedDate) : "";
+}
+
 function hasSummary(item) {
   const value = (item.resumen_ia || "").trim();
   return value && value !== "Resumen no disponible";
@@ -111,11 +154,16 @@ async function loadAll() {
     await loadDailyBriefs();
     return;
   }
+  if (state.view === "favorites") {
+    await loadFavorites();
+    return;
+  }
   if (state.view === "system") {
     await loadSystemStatus();
     return;
   }
   if (state.loading) return;
+  updateTopbarTitle();
   state.loading = true;
   document.body.classList.add("is-loading");
   const searchActive = Boolean(state.query);
@@ -159,6 +207,25 @@ async function loadDailyBriefs() {
   }
 }
 
+async function loadFavorites() {
+  if (state.loading) return;
+  state.loading = true;
+  document.body.classList.add("is-loading");
+  setViewMode("favorites");
+  setStatus("Loading favorites...");
+  try {
+    const data = await fetchJson("/api/favorites");
+    renderFavorites(data);
+    setStatus("");
+  } catch (error) {
+    favoritesFeed.innerHTML = `<div class="empty panel">Favorites could not be loaded: ${escapeHtml(error.message)}</div>`;
+    setStatus(error.message, true);
+  } finally {
+    state.loading = false;
+    document.body.classList.remove("is-loading");
+  }
+}
+
 async function loadSystemStatus() {
   if (state.loading) return;
   state.loading = true;
@@ -184,13 +251,16 @@ async function loadSystemStatus() {
 function setViewMode(view) {
   state.view = view;
   const briefsActive = view === "briefs";
+  const favoritesActive = view === "favorites";
   const systemActive = view === "system";
   const todayActive = view === "today";
   document.body.classList.toggle("view-briefs", briefsActive);
+  document.body.classList.toggle("view-favorites", favoritesActive);
   document.body.classList.toggle("view-system", systemActive);
   dailyBriefs.hidden = !briefsActive;
+  favorites.hidden = !favoritesActive;
   systemStatus.hidden = !systemActive;
-  topbarTitle.textContent = briefsActive ? "Daily Briefs" : systemActive ? "System Status" : "Today\u2019s Updates";
+  updateTopbarTitle();
   navButtons.forEach((button) => {
     const active = button.dataset.viewTarget === view;
     button.classList.toggle("active", active);
@@ -405,9 +475,24 @@ function renderDailyBriefs(items) {
     .join("");
 }
 
+function renderFavorites(data) {
+  const count = data.count || 0;
+  if (!count) {
+    favoritesFeed.innerHTML = `
+      <div class="empty panel archive-empty">
+        <strong>No favorites yet</strong>
+        <span>Use the heart button on any article to save it here for follow-up.</span>
+      </div>
+    `;
+    return;
+  }
+  favoritesFeed.innerHTML = data.items.map(renderArticle).join("");
+  bindArticleActions(favoritesFeed);
+}
+
 function renderHotTopics(items) {
   if (!items.length) {
-    hotTopics.innerHTML = `<div class="empty">No topics for the active filters.</div>`;
+    hotTopics.innerHTML = `<div class="empty">No multi-source hot topics for this date yet.</div>`;
     return;
   }
   hotTopics.innerHTML = items.map(renderTopic).join("");
@@ -420,6 +505,18 @@ function renderTopic(topic, index) {
   const titleParts = splitStarTitle(topic.title);
   const detailId = `topic-detail-${index}`;
   const sourceLabel = Number(topic.source_count) === 1 ? "source" : "sources";
+  const sources = (topic.sources || [])
+    .map((source) => `<span class="topic-source-chip">${escapeHtml(source)}</span>`)
+    .join("");
+  const supportingItems = (topic.supporting_items || [])
+    .map((item) => `
+      <a class="topic-support-item" href="${escapeHtml(item.url || "#")}" target="_blank" rel="noopener">
+        <span>${escapeHtml(item.source || "Source")}</span>
+        <strong>${escapeHtml(item.title || "Untitled")}</strong>
+        <em>${escapeHtml(Math.round(Number(item.score || 0)))} score</em>
+      </a>
+    `)
+    .join("");
   return `
     <article class="topic-card">
       <button class="topic" type="button" data-topic-toggle aria-expanded="false" aria-controls="${detailId}">
@@ -433,19 +530,23 @@ function renderTopic(topic, index) {
         <span class="topic-source-count">${escapeHtml(topic.source_count)} ${sourceLabel}</span>
       </button>
       <div id="${detailId}" class="topic-detail" hidden>
-        <div>
+        <div class="topic-detail-stat">
           <span>Theme</span>
           <strong>${escapeHtml(topic.topic)}</strong>
         </div>
-        <div>
+        <div class="topic-detail-stat">
           <span>Related items</span>
           <strong>${escapeHtml(topic.items)}</strong>
         </div>
-        <div>
+        <div class="topic-detail-stat">
           <span>Sources</span>
           <strong>${escapeHtml(topic.source_count)}</strong>
         </div>
-        <p>Lead signal: ${escapeHtml(titleParts.title)}</p>
+        <div class="topic-sources" aria-label="Supporting sources">${sources}</div>
+        <div class="topic-support-list">
+          <span>Supporting articles</span>
+          ${supportingItems || "<p>No supporting articles available.</p>"}
+        </div>
       </div>
     </article>
   `;
@@ -468,8 +569,15 @@ function renderFeed(data) {
     return;
   }
   feed.innerHTML = data.items.map(renderArticle).join("");
-  feed.querySelectorAll("[data-summary]").forEach((button) => {
+  bindArticleActions(feed);
+}
+
+function bindArticleActions(root) {
+  root.querySelectorAll("[data-summary]").forEach((button) => {
     button.addEventListener("click", () => generateSummary(button.dataset.summary));
+  });
+  root.querySelectorAll("[data-favorite]").forEach((button) => {
+    button.addEventListener("click", () => toggleFavorite(button.dataset.favorite, button));
   });
 }
 
@@ -489,6 +597,21 @@ function renderArticle(item) {
   const summaryAction = hasSummary(item)
     ? ""
     : `<button type="button" data-summary="${escapeHtml(item.id)}">Generate summary</button>`;
+  const favoriteLabel = item.is_favorite ? "Remove from favorites" : "Add to favorites";
+  const favoriteButton = `
+    <button
+      class="favorite-button${item.is_favorite ? " active" : ""}"
+      type="button"
+      data-favorite="${escapeHtml(item.id)}"
+      aria-pressed="${item.is_favorite ? "true" : "false"}"
+      title="${favoriteLabel}"
+      aria-label="${favoriteLabel}"
+    >
+      <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+        <path d="M8 13.8 6.98 12.88C3.36 9.59 1 7.45 1 4.82 1 2.68 2.68 1 4.82 1c1.2 0 2.35.56 3.1 1.45h.16A4.04 4.04 0 0 1 11.18 1C13.32 1 15 2.68 15 4.82c0 2.63-2.36 4.77-5.98 8.06L8 13.8Z"></path>
+      </svg>
+    </button>
+  `;
 
   return `
     <article class="article" id="article-${escapeHtml(item.id)}">
@@ -497,7 +620,10 @@ function renderArticle(item) {
           <div class="article-meta">${escapeHtml(item.fuente)}${time ? ` - ${escapeHtml(time)}` : ""}</div>
           <div class="badge-row"><span class="badge">${escapeHtml(item.area_label)}</span></div>
         </div>
-        <div class="score">${Number(item.selected_score || 0).toFixed(0)}</div>
+        <div class="article-side">
+          <div class="score">${Number(item.selected_score || 0).toFixed(0)}</div>
+          ${favoriteButton}
+        </div>
       </div>
       <div class="article-title-row">
         <h4>${escapeHtml(titleParts.title)}</h4>
@@ -527,6 +653,37 @@ async function generateSummary(articleId) {
   } catch (error) {
     setStatus(error.message, true);
   }
+}
+
+async function toggleFavorite(articleId, button) {
+  const wasFavorite = button.getAttribute("aria-pressed") === "true";
+  button.disabled = true;
+  try {
+    const result = await fetchJson(`/api/articles/${encodeURIComponent(articleId)}/favorite`, {
+      method: wasFavorite ? "DELETE" : "POST",
+    });
+    if (state.view === "favorites" && !result.is_favorite) {
+      await loadFavorites();
+      setStatus("Removed from favorites.");
+      return;
+    }
+    updateFavoriteButtons(articleId, Boolean(result.is_favorite));
+    setStatus(result.is_favorite ? "Saved to favorites." : "Removed from favorites.");
+  } catch (error) {
+    setStatus(error.message, true);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+function updateFavoriteButtons(articleId, isFavorite) {
+  document.querySelectorAll("[data-favorite]").forEach((button) => {
+    if (button.dataset.favorite !== articleId) return;
+    button.classList.toggle("active", isFavorite);
+    button.setAttribute("aria-pressed", String(isFavorite));
+    button.setAttribute("title", isFavorite ? "Remove from favorites" : "Add to favorites");
+    button.setAttribute("aria-label", isFavorite ? "Remove from favorites" : "Add to favorites");
+  });
 }
 
 function submitSearch() {
@@ -655,6 +812,8 @@ navButtons.forEach((button) => {
       loadAll();
     } else if (target === "briefs") {
       loadDailyBriefs();
+    } else if (target === "favorites") {
+      loadFavorites();
     } else {
       loadSystemStatus();
     }

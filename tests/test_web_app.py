@@ -9,11 +9,11 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect
 from sqlalchemy.orm import sessionmaker
 
 from src.database import Base, MacroResumen, Noticia
-from src import web_services
+from src import database, web_services
 
 
 class WebServiceTestCase(unittest.TestCase):
@@ -105,6 +105,63 @@ class WebServiceTestCase(unittest.TestCase):
         self.assertEqual([item["id"] for item in result["items"]], ["keep"])
         self.assertEqual(result["count"], 1)
 
+    def test_hot_topics_require_three_distinct_sources_and_pick_highest_score(self) -> None:
+        today = datetime.now(timezone.utc).date().isoformat()
+        self.add_article("openai-low", "OpenAI GPT launch expands agents", "Reuters", "ai_agents", 71)
+        self.add_article("openai-lead", "OpenAI GPT launch expands enterprise agents", "OpenAI Blog", "ai_agents", 93)
+        self.add_article("openai-mid", "OpenAI GPT launch covered by developers", "Hacker News", "ai_agents", 86)
+        self.add_article("small-1", "Cloud runtime outage report", "Reuters", "infrastructure_cloud", 95)
+        self.add_article("small-2", "Cloud runtime outage analysis", "GitHub Blog", "infrastructure_cloud", 94)
+
+        topics = web_services.get_hot_topics(date.fromisoformat(today))
+
+        self.assertEqual(len(topics), 1)
+        self.assertEqual(topics[0]["topic"], "OpenAI")
+        self.assertEqual(topics[0]["representative_id"], "openai-lead")
+        self.assertEqual(topics[0]["source_count"], 3)
+        self.assertEqual(topics[0]["items"], 3)
+        self.assertEqual(topics[0]["sources"], ["Hacker News", "OpenAI Blog", "Reuters"])
+        self.assertEqual([item["id"] for item in topics[0]["supporting_items"]], ["openai-lead", "openai-mid", "openai-low"])
+
+    def test_feed_filters_do_not_change_date_level_hot_topics(self) -> None:
+        today = datetime.now(timezone.utc).date().isoformat()
+        self.add_article("openai-r", "OpenAI agent launch details", "Reuters", "ai_agents", 80)
+        self.add_article("openai-o", "OpenAI agent launch details for teams", "OpenAI Blog", "ai_agents", 90)
+        self.add_article("openai-h", "OpenAI agent launch details discussion", "Hacker News", "ai_agents", 75)
+        self.add_article("visible-only", "Different GitHub repository", "GitHub Trending", "developer_tools", 99)
+
+        result = web_services.get_feed(fecha=today, fuentes=["GitHub Trending"])
+
+        self.assertEqual([item["id"] for item in result["items"]], ["visible-only"])
+        self.assertEqual(result["hot_topics"][0]["topic"], "OpenAI")
+        self.assertEqual(result["hot_topics"][0]["source_count"], 3)
+
+    def test_hot_topics_sort_by_source_count_then_score(self) -> None:
+        today = datetime.now(timezone.utc).date()
+        for article_id, source, score in [
+            ("openai-1", "Reuters", 60),
+            ("openai-2", "OpenAI Blog", 60),
+            ("openai-3", "Hacker News", 60),
+            ("openai-4", "GitHub Blog", 60),
+            ("security-1", "Reuters", 95),
+            ("security-2", "GitHub Blog", 95),
+            ("security-3", "Hacker News", 95),
+        ]:
+            title = "OpenAI model policy update" if article_id.startswith("openai") else "Security breach advisory update"
+            self.add_article(article_id, title, source, "ai_agents", score)
+
+        topics = web_services.get_hot_topics(today)
+
+        self.assertEqual([topic["topic"] for topic in topics[:2]], ["OpenAI", "Security"])
+
+    def test_hot_topics_empty_when_no_multi_source_cluster(self) -> None:
+        today = datetime.now(timezone.utc).date()
+        self.add_article("only-one", "OpenAI standalone update", "OpenAI Blog", "ai_agents", 90)
+        self.add_article("only-two-a", "Security incident report", "Reuters", "cybersecurity", 80)
+        self.add_article("only-two-b", "Security incident analysis", "Hacker News", "cybersecurity", 81)
+
+        self.assertEqual(web_services.get_hot_topics(today), [])
+
     def test_brief_returns_structured_json_when_available(self) -> None:
         today = datetime.now(timezone.utc).date()
         payload = {"intro": "Brief intro", "items": [], "trend_reading": "Trend"}
@@ -176,6 +233,67 @@ class WebServiceTestCase(unittest.TestCase):
         self.assertEqual(result["items"][0]["brief_json"], {"intro": "Yesterday", "items": []})
         self.assertIsNone(result["items"][1]["brief_json"])
 
+    def test_favorite_columns_are_declared(self) -> None:
+        columns = {column["name"] for column in inspect(self.engine).get_columns("noticias")}
+
+        self.assertIn("is_favorite", columns)
+        self.assertIn("favorited_at", columns)
+
+    def test_mark_and_remove_favorite(self) -> None:
+        self.add_article("fav-1", "Favorite story", "Reuters", "ai_agents", 82)
+
+        marked = web_services.mark_favorite("fav-1")
+        self.assertTrue(marked["ok"])
+        self.assertTrue(marked["is_favorite"])
+        self.assertIsNotNone(marked["favorited_at"])
+
+        removed = web_services.remove_favorite("fav-1")
+        self.assertTrue(removed["ok"])
+        self.assertFalse(removed["is_favorite"])
+        self.assertIsNone(removed["favorited_at"])
+
+    def test_favorites_list_only_favorites_newest_first(self) -> None:
+        self.add_article("old-fav", "Old favorite", "Reuters", "ai_agents", 80)
+        self.add_article("new-fav", "New favorite", "Reuters", "ai_agents", 90)
+        self.add_article("not-fav", "Regular story", "Reuters", "ai_agents", 95)
+        now = datetime.now(timezone.utc)
+        with self.session_factory() as session:
+            session.query(Noticia).filter(Noticia.id == "old-fav").update(
+                {"is_favorite": 1, "favorited_at": now - timedelta(hours=2)}
+            )
+            session.query(Noticia).filter(Noticia.id == "new-fav").update(
+                {"is_favorite": 1, "favorited_at": now}
+            )
+            session.commit()
+
+        result = web_services.get_favorites()
+
+        self.assertEqual(result["count"], 2)
+        self.assertEqual([item["id"] for item in result["items"]], ["new-fav", "old-fav"])
+        self.assertTrue(result["items"][0]["is_favorite"])
+
+    def test_cleanup_keeps_favorites_and_removes_old_non_favorites(self) -> None:
+        old = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=45)
+        self.add_article("keep-fav", "Keep favorite", "Reuters", "ai_agents", 80, old)
+        self.add_article("remove-old", "Remove old", "Reuters", "ai_agents", 80, old)
+        with self.session_factory() as session:
+            session.query(Noticia).filter(Noticia.id.in_(["keep-fav", "remove-old"])).update(
+                {"fecha_ingesta": old},
+                synchronize_session=False,
+            )
+            session.query(Noticia).filter(Noticia.id == "keep-fav").update(
+                {"is_favorite": 1, "favorited_at": datetime.now(timezone.utc).replace(tzinfo=None)}
+            )
+            session.commit()
+
+        with patch.object(database, "engine", self.engine):
+            database.limpiar_datos_antiguos(dias_retencion=30)
+
+        with self.session_factory() as session:
+            ids = {row.id for row in session.query(Noticia).all()}
+        self.assertIn("keep-fav", ids)
+        self.assertNotIn("remove-old", ids)
+
 
 @unittest.skipUnless(importlib.util.find_spec("fastapi"), "FastAPI is not installed")
 class WebApiRouteTests(unittest.TestCase):
@@ -222,6 +340,69 @@ class WebApiRouteTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"items": []})
+
+    def test_favorites_route_returns_items(self) -> None:
+        from fastapi.testclient import TestClient
+        import web_app
+
+        with patch.object(web_app.web_services, "get_favorites", return_value={"items": [], "count": 0}):
+            response = TestClient(web_app.app).get("/api/favorites")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"items": [], "count": 0})
+
+    def test_favorite_routes_return_state_and_missing_errors(self) -> None:
+        from fastapi.testclient import TestClient
+        import web_app
+
+        client = TestClient(web_app.app)
+        with patch.object(web_app.web_services, "mark_favorite", return_value={"ok": True, "is_favorite": True}):
+            response = client.post("/api/articles/article-1/favorite")
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["is_favorite"])
+
+        with patch.object(web_app.web_services, "remove_favorite", return_value={"ok": True, "is_favorite": False}):
+            response = client.delete("/api/articles/article-1/favorite")
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.json()["is_favorite"])
+
+        with patch.object(web_app.web_services, "mark_favorite", return_value={"ok": False, "reason": "Article not found."}):
+            response = client.post("/api/articles/missing/favorite")
+        self.assertEqual(response.status_code, 404)
+        self.assertIn("Article not found", response.json()["reason"])
+
+    def test_feed_route_returns_multi_source_hot_topic_shape(self) -> None:
+        from fastapi.testclient import TestClient
+        import web_app
+
+        payload = {
+            "items": [],
+            "count": 0,
+            "fecha": "2026-06-26",
+            "orden": "Puntaje",
+            "hot_topics": [
+                {
+                    "topic": "OpenAI",
+                    "title": "OpenAI launch",
+                    "representative_id": "article-1",
+                    "items": 3,
+                    "source_count": 3,
+                    "sources": ["Hacker News", "OpenAI Blog", "Reuters"],
+                    "score": 250.0,
+                    "supporting_items": [
+                        {"id": "article-1", "title": "OpenAI launch", "source": "OpenAI Blog", "score": 93.0, "url": "https://example.test/1"}
+                    ],
+                }
+            ],
+        }
+        with patch.object(web_app.web_services, "get_feed", return_value=payload):
+            response = TestClient(web_app.app).get("/api/feed?fecha=2026-06-26")
+
+        self.assertEqual(response.status_code, 200)
+        topic = response.json()["hot_topics"][0]
+        self.assertEqual(topic["representative_id"], "article-1")
+        self.assertEqual(topic["sources"], ["Hacker News", "OpenAI Blog", "Reuters"])
+        self.assertEqual(topic["supporting_items"][0]["source"], "OpenAI Blog")
 
     def test_scheduler_registers_feed_refresh_job(self) -> None:
         import web_app
@@ -270,25 +451,57 @@ class WebUiStaticTests(unittest.TestCase):
         self.assertIn(r"Today\u2019s Updates", script)
         self.assertIn('aria-label="Today’s Updates"', template)
         self.assertIn("Daily Briefs", template)
+        self.assertIn("Favorites", template)
         self.assertIn("Workspace", template)
         self.assertIn("Feed controls", template)
         self.assertIn("System status", template)
         self.assertIn('data-view-target="today"', template)
         self.assertIn('data-view-target="briefs"', template)
+        self.assertIn('data-view-target="favorites"', template)
         self.assertIn('id="daily-briefs"', template)
+        self.assertIn('id="favorites"', template)
+        self.assertIn('id="favorites-feed"', template)
+        self.assertIn("favorites-feed-list", template)
         self.assertIn("Executive summary", template)
         self.assertIn("Previous daily briefs", template)
         self.assertIn("previous 7 days", template)
         self.assertIn("loadDailyBriefs", script)
+        self.assertIn("loadFavorites", script)
         self.assertIn('fetchJson("/api/brief")', script)
         self.assertIn("/api/daily-briefs", script)
+        self.assertIn("/api/favorites", script)
+        self.assertIn("/favorite", script)
+        self.assertIn("favorite-button", script)
+        self.assertIn("Add to favorites", script)
+        self.assertIn("Remove from favorites", script)
+        favorite_markup = script.split('const favoriteButton = `', maxsplit=1)[1].split("  return `", maxsplit=1)[0]
+        self.assertNotIn("<span>", favorite_markup)
+        self.assertIn("M8 13.8", script)
+        self.assertIn("Use the heart button", script)
+        self.assertIn("/static/app.js?v=selected-date-title-v1", template)
+        self.assertIn("/static/app.css?v=selected-date-title-v1", template)
         topbar = template.split('class="topbar"', maxsplit=1)[1].split('id="status"', maxsplit=1)[0]
         self.assertNotIn("Command center", topbar)
+        self.assertIn('id="topbar-date"', template)
         self.assertIn("topbarTitle.textContent", script)
+        self.assertIn("function updateTopbarTitle()", script)
+        self.assertIn("formatFeedDate(selectedDate)", script)
         self.assertNotIn("topbarEyebrow", script)
         self.assertIn('search.value = ""', script)
         self.assertIn("archive-empty", script)
         self.assertIn(".mode-nav", styles)
+        self.assertIn(".topbar-date", styles)
+        archive_window_styles = styles.split(".archive-window {", maxsplit=1)[1].split("}", maxsplit=1)[0]
+        self.assertIn("text-align: center", archive_window_styles)
+        self.assertIn(".favorites-view", styles)
+        self.assertIn(".favorites-feed-list", styles)
+        self.assertIn(".favorite-button", styles)
+        self.assertIn("border-radius: 50%", styles)
+        self.assertIn("background: rgba(255, 80, 134, 0.13)", styles)
+        self.assertNotIn("background: #ffe2ec", styles)
+        self.assertIn("fill: transparent", styles)
+        self.assertIn("fill: currentColor", styles)
+        self.assertNotIn("body.view-favorites .feed {", styles)
         self.assertIn("[hidden]", styles)
 
     def test_system_status_central_panel_is_present(self) -> None:
@@ -313,6 +526,19 @@ class WebUiStaticTests(unittest.TestCase):
         self.assertIn(".system-health-grid", styles)
         self.assertIn(".source-breakdown", styles)
 
+    def test_hot_topics_render_multi_source_details(self) -> None:
+        script = Path("static/app.js").read_text(encoding="utf-8")
+        styles = Path("static/app.css").read_text(encoding="utf-8")
+
+        self.assertIn("No multi-source hot topics for this date yet.", script)
+        self.assertIn("topic.sources", script)
+        self.assertIn("topic.supporting_items", script)
+        self.assertIn("Supporting articles", script)
+        self.assertIn("topic-source-chip", script)
+        self.assertIn("topic-support-item", script)
+        self.assertIn(".topic-source-chip", styles)
+        self.assertIn(".topic-support-item", styles)
+
     def test_today_mode_does_not_render_daily_brief_panel(self) -> None:
         template = Path("templates/index.html").read_text(encoding="utf-8")
         script = Path("static/app.js").read_text(encoding="utf-8")
@@ -333,8 +559,11 @@ class WebUiStaticTests(unittest.TestCase):
         self.assertIn("IT News Trend Analyzer", brand_block)
         self.assertIn("width: 92px", styles)
         self.assertIn('id="sidebar-toggle"', template)
-        self.assertIn('data-short="TU"', template)
-        self.assertIn('data-short="DB"', template)
+        self.assertIn('class="nav-icon"', template)
+        self.assertNotIn("data-short=", template)
+        self.assertIn("body.sidebar-collapsed .nav-button > span:not(.nav-icon)", styles)
+        self.assertIn("body.sidebar-collapsed .nav-icon", styles)
+        self.assertIn(".nav-button[data-view-target=\"favorites\"] .nav-icon path", styles)
         self.assertIn("function setSidebarCollapsed", script)
         self.assertIn("function initSidebar", script)
         self.assertIn("newser.sidebarCollapsed.mobile", script)
