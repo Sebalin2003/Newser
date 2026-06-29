@@ -10,6 +10,7 @@ from collections import Counter
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from zoneinfo import ZoneInfo
 
 import yaml
@@ -17,6 +18,7 @@ from dotenv import load_dotenv
 from sqlalchemy import or_
 
 from src.database import MacroResumen, Noticia, get_session, init_db, limpiar_datos_antiguos
+from src.media import fetch_media_preview
 
 try:
     from sklearn.feature_extraction.text import TfidfVectorizer
@@ -34,6 +36,11 @@ FEED_REFRESH_INTERVAL = timedelta(minutes=30)
 HOT_TOPIC_MIN_SOURCES = 3
 HOT_TOPIC_SUPPORT_LIMIT = 5
 HOT_TOPIC_SIMILARITY_THRESHOLD = 0.42
+HOT_TOPIC_MODEL_ANCHORED_SIMILARITY_THRESHOLD = 0.62
+HOT_TOPIC_MODEL_PATTERN = re.compile(
+    r"\b(?:gpt|claude|gemini|llama|mistral|qwen|deepseek|grok|o)\s*[-\u2010-\u2015\u2212]?\s*\d+(?:\.\d+)*\b",
+    re.IGNORECASE,
+)
 _refresh_lock = threading.Lock()
 _refresh_state: dict[str, Any] = {
     "last_started_at": None,
@@ -249,6 +256,9 @@ def _serialize_article(n: Noticia, config: dict[str, Any]) -> dict[str, Any]:
         "selection_reason": score["selection_reason"],
         "is_favorite": bool(n.is_favorite),
         "favorited_at": _iso(n.favorited_at),
+        "media_url": str(n.media_url or ""),
+        "media_type": str(n.media_type or ""),
+        "media_source_url": str(n.media_source_url or ""),
     }
 
 
@@ -267,6 +277,44 @@ def _sort_items(items: list[dict[str, Any]], order: str) -> list[dict[str, Any]]
         return (ts, score) if order == "Mas reciente" else (score, ts)
 
     return sorted(items, key=key, reverse=True)
+
+
+def _canonical_feed_url(url: str) -> str:
+    raw = str(url or "").strip()
+    if not raw:
+        return ""
+    parsed = urlsplit(raw)
+    query = urlencode(sorted(parse_qsl(parsed.query, keep_blank_values=True)))
+    path = parsed.path.rstrip("/")
+    return urlunsplit((parsed.scheme.lower(), parsed.netloc.lower(), path, query, ""))
+
+
+def _canonical_feed_title(title: str) -> str:
+    text = re.sub(r"^\[\w+\]\s*", "", str(title or ""))
+    text = re.sub(r"⭐\s*[\d,]+", "", text)
+    text = re.sub(r"🔺\s*[\d,]+", "", text)
+    text = re.sub(r"\(\+[\d,]+\s+[^)]*\)", "", text)
+    return re.sub(r"\s+", " ", text).strip().lower()
+
+
+def _feed_dedupe_key(item: dict[str, Any]) -> str:
+    url = _canonical_feed_url(str(item.get("url") or ""))
+    if url:
+        return f"url:{url}"
+    title = _canonical_feed_title(str(item.get("titulo") or item.get("label") or ""))
+    return f"title:{str(item.get('fuente') or '').lower()}:{title}"
+
+
+def _dedupe_feed_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    deduped: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in items:
+        key = _feed_dedupe_key(item)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+    return deduped
 
 
 def get_feed(
@@ -304,7 +352,7 @@ def get_feed(
         rows = query.order_by(Noticia.fecha_ingesta.desc()).limit(300).all()
         items = [_serialize_article(row, config) for row in rows]
     items = [item for item in items if _matches_date(item, selected_date)]
-    items = _sort_items(items, orden)[:limit]
+    items = _dedupe_feed_items(_sort_items(items, orden))[:limit]
     return {
         "items": items,
         "count": len(items),
@@ -477,10 +525,57 @@ def generate_summary(article_id: str) -> dict[str, Any]:
 def refresh_feed() -> dict[str, Any]:
     from src.ingestor import ejecutar_ingesta
     from src.scoring import score_recent_items
+    from src.dynamic_keywords import discover_dynamic_keywords
 
     ejecutar_ingesta()
+    dynamic_keywords = discover_dynamic_keywords()
     scored = score_recent_items(load_config(), hours=24)
-    return {"ok": True, "scored": scored}
+    media_enriched = enrich_missing_media(limit=20)
+    return {"ok": True, "scored": scored, "media_enriched": media_enriched, "dynamic_keywords": dynamic_keywords}
+
+
+def get_dynamic_keywords() -> dict[str, list[dict[str, Any]]]:
+    from src.dynamic_keywords import get_active_dynamic_keywords
+
+    return {"items": get_active_dynamic_keywords()}
+
+
+def generate_daily_brief_job() -> dict[str, Any]:
+    """Refresh sources and generate today's daily brief for scheduled execution."""
+    refresh_feed()
+    from src.processor import ejecutar_procesamiento
+
+    return ejecutar_procesamiento()
+
+
+def enrich_missing_media(limit: int = 20, timeout: int = 4) -> int:
+    cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=FILTER_WINDOW_DAYS)
+    enriched = 0
+    with get_session() as session:
+        rows = (
+            session.query(Noticia)
+            .filter(
+                Noticia.url.isnot(None),
+                Noticia.url != "",
+                or_(Noticia.media_url.is_(None), Noticia.media_url == ""),
+                Noticia.fecha_ingesta >= cutoff,
+            )
+            .order_by(Noticia.fecha_ingesta.desc())
+            .limit(limit)
+            .all()
+        )
+        for article in rows:
+            try:
+                preview = fetch_media_preview(str(article.url or ""), timeout=timeout)
+            except Exception:
+                continue
+            if not preview:
+                continue
+            article.media_url = preview.media_url
+            article.media_type = preview.media_type
+            article.media_source_url = preview.media_source_url
+            enriched += 1
+    return enriched
 
 
 def _run_refresh_job() -> None:
@@ -578,10 +673,24 @@ def _topic_text(item: dict[str, Any]) -> str:
     )
 
 
+def _topic_model_tokens(text: str) -> set[str]:
+    return {
+        re.sub(r"[\s\u2010-\u2015\u2212]+", "-", match.group(0).lower()).strip("-")
+        for match in HOT_TOPIC_MODEL_PATTERN.finditer(text)
+    }
+
+
 def _topic_tokens(item: dict[str, Any]) -> set[str]:
     text = _topic_text(item).lower()
     tokens = set(re.findall(r"[a-z][a-z0-9\-]{2,}", text))
-    return {token for token in tokens if token not in TOPIC_STOPWORDS}
+    return {token for token in tokens if token not in TOPIC_STOPWORDS} | _topic_model_tokens(text)
+
+
+def _format_model_label(token: str) -> str | None:
+    if not HOT_TOPIC_MODEL_PATTERN.fullmatch(token):
+        return None
+    prefix, version = re.match(r"([a-z]+)(.*)", token, re.IGNORECASE).groups()
+    return f"{prefix.upper()}{version}"
 
 
 def _topic_label(items: list[dict[str, Any]], representative: dict[str, Any]) -> str:
@@ -589,6 +698,8 @@ def _topic_label(items: list[dict[str, Any]], representative: dict[str, Any]) ->
     for item in items:
         counts.update(_topic_tokens(item))
     for token, _count in counts.most_common():
+        if model_label := _format_model_label(token):
+            return model_label
         if token in TOPIC_LABELS:
             return TOPIC_LABELS[token]
     if counts:
@@ -602,6 +713,10 @@ def _shared_topic_overlap(left: dict[str, Any], right: dict[str, Any]) -> int:
     return len(_topic_tokens(left) & _topic_tokens(right))
 
 
+def _shared_model_overlap(left: dict[str, Any], right: dict[str, Any]) -> int:
+    return len(_topic_model_tokens(_topic_text(left)) & _topic_model_tokens(_topic_text(right)))
+
+
 def _cluster_unassigned_topics(items: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
     if len(items) < 2:
         return [[item] for item in items]
@@ -609,7 +724,8 @@ def _cluster_unassigned_topics(items: list[dict[str, Any]]) -> list[list[dict[st
         clusters: dict[str, list[dict[str, Any]]] = {}
         for item in items:
             tokens = sorted(_topic_tokens(item))
-            key = " ".join(tokens[:2]) or str(item.get("id"))
+            model_tokens = sorted(_topic_model_tokens(_topic_text(item)))
+            key = " ".join(model_tokens[:1] or tokens[:2]) or str(item.get("id"))
             clusters.setdefault(key, []).append(item)
         return list(clusters.values())
 
@@ -625,10 +741,18 @@ def _cluster_unassigned_topics(items: list[dict[str, Any]]) -> list[list[dict[st
     for index, item in enumerate(items):
         best_cluster = -1
         best_similarity = HOT_TOPIC_SIMILARITY_THRESHOLD
+        item_models = _topic_model_tokens(_topic_text(item))
         for cluster_index, members in enumerate(clusters):
+            cluster_models = set().union(*(_topic_model_tokens(_topic_text(items[member])) for member in members))
             average_similarity = sum(float(similarities[index][member]) for member in members) / len(members)
             overlap = max(_shared_topic_overlap(item, items[member]) for member in members)
-            if average_similarity >= best_similarity or overlap >= 3:
+            model_overlap = max(_shared_model_overlap(item, items[member]) for member in members)
+            if item_models or cluster_models:
+                if item_models and cluster_models and not (item_models & cluster_models):
+                    continue
+                if not model_overlap and (average_similarity < HOT_TOPIC_MODEL_ANCHORED_SIMILARITY_THRESHOLD or overlap < 3):
+                    continue
+            if average_similarity >= best_similarity or overlap >= 3 or model_overlap >= 1:
                 best_similarity = average_similarity
                 best_cluster = cluster_index
         if best_cluster >= 0:

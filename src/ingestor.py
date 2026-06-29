@@ -34,7 +34,9 @@ import requests
 import yaml
 
 from .database import Noticia, get_session
+from .media import extract_media_from_feed_entry
 from .global_news import GlobalNewsItem, fetch_global_news
+from .relevance import classify_relevance
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -82,13 +84,8 @@ def _ahora_utc() -> datetime:
 
 
 def _es_relevante(titulo: str, descripcion: str, areas_interes: dict) -> tuple[bool, str]:
-    """Clasifica una noticia contra las keywords de áreas_interes (OR inclusivo)."""
-    texto = f"{titulo} {descripcion}".lower()
-    for area, keywords in areas_interes.items():
-        for kw in keywords:
-            if kw.lower() in texto:
-                return True, area
-    return False, ""
+    """Clasifica una noticia contra keywords fuertes y evita falsos positivos como 'ai' en AirPods."""
+    return classify_relevance(titulo, descripcion, areas_interes)
 
 
 def _sanitize_record(data: dict) -> dict:
@@ -145,6 +142,9 @@ def _noticias_desde_global_items(items: list[GlobalNewsItem]) -> list[Noticia]:
             area_matcheada=_area_desde_categoria_global(item.category),
             fecha_ingesta=_ahora_utc(),
             score=item.score,
+            media_url=item.media_url,
+            media_type=item.media_type,
+            media_source_url=item.media_source_url,
         ))
     return noticias
 
@@ -275,7 +275,8 @@ def _worker_github(
                 full_name, f"{descripcion} {language}", areas_interes
             )
             if not es_rel:
-                area = "developer_tools"  # trending siempre relevante
+                metricas["no_relevantes"] += 1
+                continue
 
             # Título enriquecido con ambas métricas de estrellas
             titulo = (
@@ -391,7 +392,8 @@ def _worker_hn(
 
             es_rel, area = _es_relevante(titulo, texto, areas_interes)
             if not es_rel:
-                area = "developer_tools"
+                metricas["no_relevantes"] += 1
+                continue
 
             id_hash = _calcular_hash(titulo, url)
             noticias.append(Noticia(
@@ -479,7 +481,8 @@ def _worker_hn_algolia(
 
             es_rel, area = _es_relevante(titulo, texto, areas_interes)
             if not es_rel:
-                area = "developer_tools"
+                metricas["no_relevantes"] += 1
+                continue
 
             id_hash = _calcular_hash(titulo, url_hit)
             noticias.append(Noticia(
@@ -554,6 +557,7 @@ def _worker_rss(
                 continue
 
             id_hash = _calcular_hash(titulo, url)
+            media = extract_media_from_feed_entry(entrada, url)
             noticias.append(Noticia(
                 id=id_hash,
                 titulo=titulo,
@@ -564,6 +568,9 @@ def _worker_rss(
                 resumen_ia="Resumen no disponible",
                 area_matcheada=area,
                 fecha_ingesta=_ahora_utc(),
+                media_url=media.media_url if media else None,
+                media_type=media.media_type if media else None,
+                media_source_url=media.media_source_url if media else None,
             ))
 
     except requests.exceptions.Timeout:
@@ -708,6 +715,10 @@ def ejecutar_ingesta(progress_callback: Callable[[str], None] | None = None) -> 
                 else:
                     if noticia.discussion_url and not existing.discussion_url:
                         existing.discussion_url = noticia.discussion_url
+                    if noticia.media_url and not existing.media_url:
+                        existing.media_url = noticia.media_url
+                        existing.media_type = noticia.media_type
+                        existing.media_source_url = noticia.media_source_url
                     if noticia.fuente == "GitHub Trending":
                         existing.titulo = noticia.titulo
                         existing.url = noticia.url

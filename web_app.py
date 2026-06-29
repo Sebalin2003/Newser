@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Annotated
 
 from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 from fastapi import FastAPI, Query
 from fastapi.responses import JSONResponse
@@ -18,6 +19,7 @@ from src import web_services
 
 BASE_DIR = Path(__file__).resolve().parent
 REFRESH_JOB_ID = "feed_refresh"
+DAILY_BRIEF_JOB_ID = "daily_brief"
 
 
 @asynccontextmanager
@@ -41,6 +43,14 @@ def create_scheduler() -> BackgroundScheduler:
         id=REFRESH_JOB_ID,
         kwargs={"background": True},
         max_instances=1,
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        web_services.generate_daily_brief_job,
+        trigger=CronTrigger(hour=8, minute=0, timezone=web_services.BRIEF_TIMEZONE),
+        id=DAILY_BRIEF_JOB_ID,
+        max_instances=1,
+        misfire_grace_time=3600,
         replace_existing=True,
     )
     return scheduler
@@ -106,6 +116,11 @@ def api_refresh_status(request: Request):
         job = scheduler.get_job(REFRESH_JOB_ID)
         next_check_at = job.next_run_time if job else None
     return web_services.get_refresh_status(next_check_at)
+
+
+@app.get("/api/dynamic-keywords")
+def api_dynamic_keywords():
+    return web_services.get_dynamic_keywords()
 
 
 @app.get("/api/search/suggestions")

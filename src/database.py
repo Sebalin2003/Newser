@@ -103,6 +103,9 @@ class Noticia(Base):
     score_version: str = Column(String(64), nullable=True)
     is_favorite: int = Column(Integer, nullable=False, default=0)
     favorited_at: datetime = Column(DateTime, nullable=True)
+    media_url: str = Column(Text, nullable=True)
+    media_type: str = Column(String(16), nullable=True)
+    media_source_url: str = Column(Text, nullable=True)
 
     def __repr__(self) -> str:
         return f"<Noticia id={self.id[:8]}... titulo='{self.titulo[:40]}'>"
@@ -123,6 +126,27 @@ class Tendencia(Base):
 
     def __repr__(self) -> str:
         return f"<Tendencia palabra='{self.palabra}' frecuencia={self.frecuencia}>"
+
+
+# ---------------------------------------------------------------------------
+# Modelo: DynamicKeyword
+# ---------------------------------------------------------------------------
+class DynamicKeyword(Base):
+    """Runtime-learned emerging keyword used as a guarded scoring boost."""
+
+    __tablename__ = "dynamic_keywords"
+
+    term: str = Column(String(128), primary_key=True, index=True)
+    frequency: int = Column(Integer, nullable=False, default=0)
+    source_count: int = Column(Integer, nullable=False, default=0)
+    momentum_score: float = Column(Float, nullable=False, default=0.0)
+    is_active: int = Column(Integer, nullable=False, default=1)
+    first_seen_at: datetime = Column(DateTime, nullable=True)
+    last_seen_at: datetime = Column(DateTime, nullable=True)
+    updated_at: datetime = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+    def __repr__(self) -> str:
+        return f"<DynamicKeyword term='{self.term}' momentum={self.momentum_score:.2f}>"
 
 
 # ---------------------------------------------------------------------------
@@ -271,6 +295,9 @@ def migrar_schema() -> None:
             "score_version": "ALTER TABLE noticias ADD COLUMN score_version VARCHAR(64)",
             "is_favorite": "ALTER TABLE noticias ADD COLUMN is_favorite INTEGER NOT NULL DEFAULT 0",
             "favorited_at": "ALTER TABLE noticias ADD COLUMN favorited_at DATETIME",
+            "media_url": "ALTER TABLE noticias ADD COLUMN media_url TEXT",
+            "media_type": "ALTER TABLE noticias ADD COLUMN media_type VARCHAR(16)",
+            "media_source_url": "ALTER TABLE noticias ADD COLUMN media_source_url TEXT",
         }
 
         with engine.begin() as conn:

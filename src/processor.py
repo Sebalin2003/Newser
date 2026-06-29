@@ -34,8 +34,10 @@ from sqlalchemy import select
 # Motor IA: Gemini (primario) — nuevo SDK google-genai
 try:
     from google import genai as google_genai
+    from google.genai import types as google_genai_types
     GEMINI_AVAILABLE = True
 except ImportError:
+    google_genai_types = None
     GEMINI_AVAILABLE = False
     logging.getLogger(__name__).warning("google-genai no instalado. Ejecuta: pip install google-genai")
 
@@ -467,16 +469,20 @@ def clustering_diario(config: dict, progress_callback: Callable[[str], None] = N
 # Motor de IA — Gemini
 # ===========================================================================
 
+DEFAULT_GEMINI_MODEL = "gemini-3.1-flash-lite"
+GEMINI_FALLBACK_MODELS = ("gemini-2.5-flash-lite",)
+DEPRECATED_GEMINI_MODELS = {"gemini-2.0-flash", "gemini-2-flash"}
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash").strip() or "gemini-2.0-flash"
+_configured_gemini_model = os.getenv("GEMINI_MODEL", DEFAULT_GEMINI_MODEL).strip() or DEFAULT_GEMINI_MODEL
+GEMINI_MODEL = DEFAULT_GEMINI_MODEL if _configured_gemini_model in DEPRECATED_GEMINI_MODELS else _configured_gemini_model
 LAST_GEMINI_ERROR: str | None = None
+LAST_GEMINI_MODEL: str | None = None
 
 _PROMPT_RESUMEN = (
     "Eres un analista de noticias tecnológicas. "
-    "Dado el siguiente titular, genera un resumen ejecutivo claro y legible de entre 3 y 4 líneas "
-    "en español. Clasifica el sentimiento del evento. "
-    "Devuelve EXCLUSIVAMENTE un objeto JSON válido con las claves: "
-    "'resumen' (string) y 'sentimiento' (string: positivo | negativo | neutral).\n\n"
+    "Resume el siguiente titular en español para un lector técnico. "
+    "Explica qué pasó y por qué importa, sin inventar datos. "
+    "Responde solo JSON válido con la clave 'resumen' (máximo 3 frases).\n\n"
     "Titular: {titulo}\n\nRespuesta JSON:"
 )
 
@@ -506,73 +512,117 @@ def _verificar_gemini() -> bool:
     logger.info("Gemini configurado localmente; preflight remoto omitido para proteger cuota.")
     return True
 
-def _mensaje_error_gemini(exc: Exception) -> str:
+def _gemini_candidate_models() -> list[str]:
+    """Return configured Gemini model plus safe fallbacks, without duplicates."""
+    models: list[str] = []
+    for model in (GEMINI_MODEL, DEFAULT_GEMINI_MODEL, *GEMINI_FALLBACK_MODELS):
+        model = str(model or "").strip()
+        if model and model not in models:
+            models.append(model)
+    return models
+
+
+def _is_gemini_fallback_error(exc: Exception) -> bool:
+    msg_lower = str(exc).lower()
+    return any(
+        marker in msg_lower
+        for marker in ("429", "quota", "rate", "exhausted", "not found", "model")
+    )
+
+
+def _gemini_model_usado() -> str:
+    return LAST_GEMINI_MODEL or GEMINI_MODEL
+
+
+def _mensaje_error_gemini(exc: Exception, model: str | None = None) -> str:
     """Convierte errores del SDK en mensajes seguros para mostrar en la UI."""
+    model = model or GEMINI_MODEL
     msg = str(exc)
     msg_lower = msg.lower()
     if "429" in msg or "quota" in msg_lower or "rate" in msg_lower or "exhausted" in msg_lower:
         return (
-            f"Gemini respondio sin cuota disponible para `{GEMINI_MODEL}`. "
+            f"Gemini respondio sin cuota disponible para `{model}`. "
             "Revisa cuota/billing en Google AI Studio o configura otro `GEMINI_MODEL` con cuota."
         )
     if "api key" in msg_lower or "apikey" in msg_lower or "permission_denied" in msg_lower or "unauthorized" in msg_lower:
         return "Gemini rechazo la API key. Revisa `GEMINI_API_KEY` y reinicia la app."
     if "not found" in msg_lower or "model" in msg_lower:
-        return f"El modelo `{GEMINI_MODEL}` no esta disponible para esta API key. Cambia `GEMINI_MODEL` y reinicia la app."
+        return f"El modelo `{model}` no esta disponible para esta API key. Cambia `GEMINI_MODEL` y reinicia la app."
     return "Gemini no pudo generar el resumen. Revisa la configuracion y vuelve a intentar."
 
 
 def _llamar_gemini(prompt: str, progress_callback: Callable[[str], None] = None, interactive: bool = False) -> str | None:
     """
     Llama a Gemini usando el nuevo SDK google-genai.
-    Falla rapido ante rate-limit/cuota para proteger RPM/RPD.
+    Prueba el modelo configurado y fallbacks solo ante cuota/modelo no disponible.
     """
-    global LAST_GEMINI_ERROR
+    global LAST_GEMINI_ERROR, LAST_GEMINI_MODEL
     LAST_GEMINI_ERROR = None
+    LAST_GEMINI_MODEL = None
 
     if not GEMINI_AVAILABLE:
         LAST_GEMINI_ERROR = "Gemini no esta disponible: falta instalar `google-genai`."
         if progress_callback:
-            progress_callback("Gemini no está disponible: falta instalar google-genai.")
+            progress_callback("Gemini no esta disponible: falta instalar google-genai.")
         return None
     if not GEMINI_API_KEY:
         LAST_GEMINI_ERROR = "Gemini no esta configurado: falta `GEMINI_API_KEY`."
         if progress_callback:
-            progress_callback("Gemini no está configurado: falta GEMINI_API_KEY.")
+            progress_callback("Gemini no esta configurado: falta GEMINI_API_KEY.")
         return None
+
     import traceback
+
     client = google_genai.Client(api_key=GEMINI_API_KEY)
-    for intento in range(3):
+    request_config = None
+    if interactive and google_genai_types is not None:
+        request_config = google_genai_types.GenerateContentConfig(
+            temperature=0.2,
+            maxOutputTokens=180,
+            responseMimeType="application/json",
+            responseSchema={
+                "type": "object",
+                "properties": {"resumen": {"type": "string"}},
+                "required": ["resumen"],
+            },
+            thinkingConfig=google_genai_types.ThinkingConfig(thinkingBudget=0),
+        )
+    attempted_models: list[str] = []
+    for model in _gemini_candidate_models():
+        attempted_models.append(model)
         try:
-            response = client.models.generate_content(
-                model=GEMINI_MODEL,
-                contents=prompt,
-            )
-            return response.text.strip() if response.text else None
+            kwargs = {"model": model, "contents": prompt}
+            if request_config is not None:
+                kwargs["config"] = request_config
+            response = client.models.generate_content(**kwargs)
+            if response.text:
+                LAST_GEMINI_MODEL = model
+                return response.text.strip()
+            LAST_GEMINI_ERROR = f"Gemini no devolvio texto con el modelo `{model}`."
+            return None
         except Exception as exc:
-            LAST_GEMINI_ERROR = _mensaje_error_gemini(exc)
-            msg = str(exc)
-            if "429" in msg or "quota" in msg.lower() or "rate" in msg.lower() or "exhausted" in msg.lower():
-                logger.warning("Gemini rate-limit/cuota agotada. Fallando rapido para proteger RPM/RPD.")
-                return None
-            else:
-                logger.warning("Error en llamada a Gemini: %s", exc)
-                if progress_callback:
-                    progress_callback(f"🚨 [GEMINI ERROR] {type(exc).__name__}: {str(exc)}")
-                print(f"[GEMINI ERROR] Tipo: {type(exc).__name__}")
-                print(f"[GEMINI ERROR] Mensaje: {str(exc)}")
-                print(f"[GEMINI ERROR] Traceback:\n{traceback.format_exc()}")
-                return None
-    logger.warning("Gemini agotó los 3 reintentos. Sin fallback local configurado.")
+            LAST_GEMINI_ERROR = _mensaje_error_gemini(exc, model)
+            if _is_gemini_fallback_error(exc):
+                logger.warning("Gemini no disponible para %s. Probando fallback si existe.", model)
+                continue
+            logger.warning("Error en llamada a Gemini: %s", exc)
+            if progress_callback:
+                progress_callback(f"[GEMINI ERROR] {type(exc).__name__}: {str(exc)}")
+            print(f"[GEMINI ERROR] Tipo: {type(exc).__name__}")
+            print(f"[GEMINI ERROR] Mensaje: {str(exc)}")
+            print(f"[GEMINI ERROR] Traceback:\n{traceback.format_exc()}")
+            return None
+
+    logger.warning("Gemini sin cuota/modelo disponible. Modelos intentados: %s", ", ".join(attempted_models))
     if progress_callback:
-        progress_callback("Gemini no respondió. Resumen no disponible.")
+        progress_callback("Gemini no respondio con los modelos configurados. Resumen no disponible.")
     return None
 
 
 def _parsear_json_ia(raw: str) -> dict:
     """
     Extrae el primer bloque JSON de la respuesta del LLM.
-    Fallback: resumen=raw, sentimiento=neutral.
+    Fallback: resumen=raw.
     """
     if not raw:
         return {"resumen": "Resumen no disponible", "sentimiento": "neutral"}
@@ -582,10 +632,7 @@ def _parsear_json_ia(raw: str) -> dict:
         if match:
             data = json.loads(match.group())
             resumen = str(data.get("resumen", "")).strip() or "Resumen no disponible"
-            sentimiento = str(data.get("sentimiento", "neutral")).strip().lower()
-            if sentimiento not in ("positivo", "negativo", "neutral"):
-                sentimiento = "neutral"
-            return {"resumen": resumen, "sentimiento": sentimiento}
+            return {"resumen": resumen, "sentimiento": "neutral"}
     except (json.JSONDecodeError, AttributeError):
         pass
     return {"resumen": raw[:400] if raw else "Resumen no disponible", "sentimiento": "neutral"}
@@ -909,7 +956,7 @@ Reglas:
             brief_data["score_version"] = SCORE_VERSION
             texto = _brief_json_to_text(brief_data)
             brief_json = json.dumps(brief_data, ensure_ascii=False)
-            modelo_usado = GEMINI_MODEL
+            modelo_usado = _gemini_model_usado()
             logger.info(
                 "MacroResumen hibrido generado con Gemini (%d locales, %d globales).",
                 n_noticias_hoy,
@@ -917,7 +964,7 @@ Reglas:
             )
         elif raw:
             texto = raw
-            modelo_usado = GEMINI_MODEL
+            modelo_usado = _gemini_model_usado()
             logger.info("MacroResumen generado con Gemini (%d noticias).", n_noticias_hoy)
         else:
             texto = LAST_GEMINI_ERROR or "Gemini no pudo generar el brief del dia. Revisa cuota, clave o modelo configurado."
@@ -932,7 +979,7 @@ Reglas:
             modelo=modelo_usado,
             brief_json=brief_json,
         )
-        return {"macro_resumen_generado": True, "texto": texto, "uso_api": modelo_usado == GEMINI_MODEL}
+        return {"macro_resumen_generado": True, "texto": texto, "uso_api": modelo_usado != "gemini_error"}
 
         if n_noticias_hoy < 3:
             _persistir_macro_resumen(fecha=hoy, texto=FALLBACK_BAJO_VOLUMEN, n_noticias=n_noticias_hoy, n_clusters=0, modelo="fallback")
@@ -971,14 +1018,14 @@ Responde SOLO con el resumen, sin títulos ni bullet points."""
         # Intento Gemini (primario)
         texto = _llamar_gemini(prompt, progress_callback)
         if texto:
-            modelo_usado = GEMINI_MODEL
+            modelo_usado = _gemini_model_usado()
             logger.info("MacroResumen generado con Gemini (%d noticias).", n_noticias_hoy)
         else:
             texto = FALLBACK_BAJO_VOLUMEN
             logger.warning("Gemini no disponible. Se guarda fallback de bajo volumen.")
 
         _persistir_macro_resumen(fecha=hoy, texto=texto, n_noticias=n_noticias_hoy, n_clusters=0, modelo=modelo_usado)
-        return {"macro_resumen_generado": True, "texto": texto, "uso_api": modelo_usado == GEMINI_MODEL}
+        return {"macro_resumen_generado": True, "texto": texto, "uso_api": modelo_usado != "fallback"}
 
 
 # ===========================================================================
@@ -986,7 +1033,7 @@ Responde SOLO con el resumen, sin títulos ni bullet points."""
 # ===========================================================================
 
 def _generar_resumen_gemini(titulo: str, progress_callback: Callable[[str], None] = None, interactive: bool = False) -> str:
-    """Genera resumen + sentimiento vía Gemini 2.0 Flash. Retorna raw JSON string."""
+    """Genera resumen via Gemini. Retorna raw JSON string."""
     prompt = _PROMPT_RESUMEN.format(titulo=titulo)
     resultado = _llamar_gemini(prompt, progress_callback, interactive)
     return resultado or "Resumen no disponible"
@@ -1081,8 +1128,6 @@ def enriquecer_con_ia(config: dict, max_noticias: int = 10, progress_callback: C
 
 def generar_resumen_individual(n_id: str, titulo: str) -> dict[str, Any]:
     """Genera un resumen para un único artículo con Gemini y persiste el resultado."""
-    config = cargar_config_procesador()
-
     if not GEMINI_AVAILABLE:
         return {
             "ok": False,
@@ -1095,17 +1140,14 @@ def generar_resumen_individual(n_id: str, titulo: str) -> dict[str, Any]:
         }
 
     try:
-        _, res, sent = _worker_enriquecer(
-            idx=1, total_candidatas=1, noticia_id=n_id, titulo=titulo,
-            config=config,
-            progress_callback=None, interactive=True
-        )
+        raw = _generar_resumen_gemini(titulo, progress_callback=None, interactive=True)
+        parsed = _parsear_json_ia(raw)
+        res = parsed["resumen"]
 
         with get_session() as session:
             nd = session.get(Noticia, n_id)
             if nd:
                 nd.resumen_ia = res
-                nd.sentimiento = sent
             session.commit()
 
         if res == "Resumen no disponible":
@@ -1120,7 +1162,7 @@ def generar_resumen_individual(n_id: str, titulo: str) -> dict[str, Any]:
                 "ok": False,
                 "reason": "Gemini no devolvió un resumen válido. Revisá la clave, cuota o modelo configurado.",
             }
-        return {"ok": True, "reason": ""}
+        return {"ok": True, "summary": res, "reason": ""}
     except Exception as e:
         logger.error("Error al generar resumen individual para la noticia %s: %s", n_id, e)
         return {

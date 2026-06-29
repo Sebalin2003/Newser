@@ -12,6 +12,8 @@ from urllib.parse import urlparse
 import feedparser
 import requests
 
+from src.media import MediaPreview, extract_media_from_feed_entry
+
 logger = logging.getLogger(__name__)
 
 TRUSTED_SOURCES = {
@@ -53,6 +55,9 @@ class GlobalNewsItem:
     excerpt: str
     category: str
     score: int = 0
+    media_url: str | None = None
+    media_type: str | None = None
+    media_source_url: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -111,6 +116,7 @@ def normalize_global_item(
     excerpt: str = "",
     category: str = "IT",
     score: int = 0,
+    media: MediaPreview | None = None,
 ) -> GlobalNewsItem | None:
     title = _strip_html(title)
     url = (url or "").strip()
@@ -129,6 +135,9 @@ def normalize_global_item(
         excerpt=excerpt[:500],
         category=clean_category,
         score=int(score or 0),
+        media_url=media.media_url if media else None,
+        media_type=media.media_type if media else None,
+        media_source_url=media.media_source_url if media else None,
     )
 
 
@@ -208,7 +217,8 @@ def fetch_global_news(max_items: int = 10, timeout: int = 12) -> list[GlobalNews
             excerpt = getattr(entry, "summary", "") or getattr(entry, "description", "")
             published = getattr(entry, "published", "") or getattr(entry, "updated", "")
             score = max(1, max_items * 2 - index)
-            item = normalize_global_item(title, source, link, published, excerpt, score=score)
+            media = extract_media_from_feed_entry(entry, link)
+            item = normalize_global_item(title, source, link, published, excerpt, score=score, media=media)
             items.append(item)
 
     return dedupe_global_items(items)[:max_items]

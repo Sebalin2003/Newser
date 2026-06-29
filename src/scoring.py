@@ -8,15 +8,18 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import urlparse
 
-SCORE_VERSION = "selected-v1"
+from .relevance import contains_keyword, is_consumer_off_topic, strong_signal_count, weak_signal_count
+
+SCORE_VERSION = "selected-v2"
 
 WEIGHTS = {
-    "topic_relevance": 0.35,
-    "source_credibility": 0.20,
-    "freshness": 0.15,
-    "popularity": 0.15,
+    "topic_relevance": 0.28,
+    "source_credibility": 0.15,
+    "freshness": 0.10,
+    "popularity": 0.08,
     "technical_importance": 0.10,
-    "coverage_overlap": 0.05,
+    "coverage_overlap": 0.04,
+    "relevance_quality": 0.25,
 }
 
 AREA_SCORES = {
@@ -99,7 +102,7 @@ IMPORTANCE_KEYWORDS = (
 @dataclass(frozen=True)
 class ScoringResult:
     selected_score: float
-    components: dict[str, float]
+    components: dict[str, Any]
     tags: list[str]
     reason: str
 
@@ -171,7 +174,7 @@ def _source_score(source: str, config: dict[str, Any]) -> float:
 def _tags_for(text: str, area: str | None) -> list[str]:
     tags: list[str] = []
     for tag, keywords in TAG_KEYWORDS.items():
-        if any(re.search(rf"\b{re.escape(keyword)}\b", text) for keyword in keywords):
+        if any(contains_keyword(text, keyword) for keyword in keywords):
             tags.append(tag)
 
     area_tags = {
@@ -182,6 +185,8 @@ def _tags_for(text: str, area: str | None) -> list[str]:
         "chips_hardware": "Semiconductors",
     }
     area_tag = area_tags.get(_core_area(area))
+    if area_tag == "AI" and "AI" not in tags and strong_signal_count(text) == 0:
+        area_tag = None
     if area_tag and area_tag not in tags:
         tags.insert(0, area_tag)
     return tags[:5]
@@ -199,7 +204,7 @@ def _topic_score(text: str, area: str | None, tags: list[str]) -> float:
         1
         for keywords in TAG_KEYWORDS.values()
         for keyword in keywords
-        if re.search(rf"\b{re.escape(keyword)}\b", text)
+        if contains_keyword(text, keyword)
     )
     return min(100.0, score + min(keyword_hits, 6) * 2)
 
@@ -240,6 +245,42 @@ def _importance_score(text: str, tags: list[str]) -> float:
     return min(100.0, score + hits * 9)
 
 
+def _dynamic_keyword_matches(text: str, dynamic_keywords: list[str] | None) -> list[str]:
+    if not dynamic_keywords:
+        return []
+    return [term for term in dynamic_keywords if contains_keyword(text, term)]
+
+
+def _dynamic_keyword_boost(matches: list[str]) -> float:
+    if not matches:
+        return 0.0
+    return min(12.0, 4.0 + len(matches[:4]) * 2.0)
+
+
+def _relevance_quality_score(text: str, tags: list[str], area: str | None) -> float:
+    strong = strong_signal_count(text)
+    weak = weak_signal_count(text)
+    score = 20.0 + min(strong, 5) * 15 + min(weak, 4) * 4
+    if _core_area(area) in {"ai_agents", "cybersecurity", "infrastructure_cloud", "chips_hardware"} and strong:
+        score += 10
+    if "Developer Tools" in tags and strong:
+        score += 6
+    if is_consumer_off_topic(text):
+        score -= 35
+    return max(0.0, min(100.0, score))
+
+
+def _apply_relevance_cap(score: float, components: dict[str, float], text: str) -> float:
+    relevance = components["relevance_quality"]
+    if is_consumer_off_topic(text) and strong_signal_count(text) == 0:
+        return min(score, 48.0)
+    if relevance < 35:
+        return min(score, 58.0)
+    if relevance < 55:
+        return min(score, 72.0)
+    return score
+
+
 def _coverage_score(item: Any, coverage: dict[Any, tuple[int, int]] | None) -> float:
     if not coverage:
         return 0.0
@@ -263,6 +304,7 @@ def calculate_item_score(
     config: dict[str, Any] | None = None,
     now: datetime | None = None,
     coverage: dict[Any, tuple[int, int]] | None = None,
+    dynamic_keywords: list[str] | None = None,
 ) -> ScoringResult:
     config = config or {}
     now = now or datetime.now(timezone.utc)
@@ -270,19 +312,25 @@ def calculate_item_score(
     area = _get(item, "area_matcheada") or _get(item, "area")
     source = str(_get(item, "fuente") or _get(item, "source") or "")
     tags = _tags_for(text, area)
+    dynamic_matches = _dynamic_keyword_matches(text, dynamic_keywords)
+    dynamic_boost = _dynamic_keyword_boost(dynamic_matches)
 
     components = {
-        "topic_relevance": _topic_score(text, area, tags),
+        "topic_relevance": min(100.0, _topic_score(text, area, tags) + dynamic_boost),
         "source_credibility": _source_score(source, config),
         "freshness": _freshness_score(item, now),
         "popularity": _popularity_score(item),
-        "technical_importance": _importance_score(text, tags),
+        "technical_importance": min(100.0, _importance_score(text, tags) + dynamic_boost),
         "coverage_overlap": _coverage_score(item, coverage),
+        "relevance_quality": min(100.0, _relevance_quality_score(text, tags, area) + dynamic_boost),
+        "dynamic_keyword_boost": dynamic_boost,
+        "dynamic_keyword_matches": dynamic_matches,
     }
     selected_score = round(sum(components[key] * weight for key, weight in WEIGHTS.items()), 1)
+    selected_score = _apply_relevance_cap(selected_score, components, text)
     return ScoringResult(
         selected_score=min(100.0, selected_score),
-        components={key: round(value, 1) for key, value in components.items()},
+        components={key: round(value, 1) if isinstance(value, (int, float)) else value for key, value in components.items()},
         tags=tags,
         reason=_selection_reason(source, tags, components),
     )
@@ -330,6 +378,12 @@ def score_recent_items(config: dict[str, Any], hours: int = 24) -> int:
     cutoff = (now - timedelta(hours=hours)).replace(tzinfo=None)
     updated = 0
     with get_session() as session:
+        try:
+            from .dynamic_keywords import active_terms
+
+            dynamic_keywords = active_terms()
+        except Exception:
+            dynamic_keywords = []
         items = (
             session.query(Noticia)
             .filter(Noticia.fecha_ingesta >= cutoff)
@@ -337,7 +391,7 @@ def score_recent_items(config: dict[str, Any], hours: int = 24) -> int:
         )
         coverage = build_coverage_context(items)
         for item in items:
-            result = calculate_item_score(item, config=config, now=now, coverage=coverage)
+            result = calculate_item_score(item, config=config, now=now, coverage=coverage, dynamic_keywords=dynamic_keywords)
             item.selected_score = result.selected_score
             item.score_components_json = json.dumps(result.components, ensure_ascii=False)
             item.tags_json = json.dumps(result.tags, ensure_ascii=False)

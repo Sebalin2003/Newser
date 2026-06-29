@@ -31,6 +31,9 @@ const systemHealthBadge = document.querySelector("#system-health-badge");
 const systemHealth = document.querySelector("#system-health");
 const systemMetrics = document.querySelector("#system-metrics");
 const sourceBreakdown = document.querySelector("#source-breakdown");
+const mediaModal = document.querySelector("#media-modal");
+const mediaModalImage = document.querySelector("#media-modal-image");
+const mediaModalClose = document.querySelector("#media-modal-close");
 
 function setStatus(message, isError = false) {
   statusLine.textContent = message || "";
@@ -402,9 +405,12 @@ function renderSystemError(message) {
 }
 
 function renderBrief(data) {
-  const title = brief.querySelector(".section-title").outerHTML;
   if (!data.available) {
-    brief.innerHTML = `${title}<div class="empty">No daily brief is available for this date yet.</div>`;
+    brief.innerHTML = renderCurrentBriefShell(
+      `<div class="empty">No daily brief is available for this date yet.</div>`,
+      "",
+    );
+    bindCurrentBriefToggle();
     return;
   }
   const json = data.brief_json;
@@ -426,11 +432,30 @@ function renderBrief(data) {
   } else {
     body = `<p>${escapeHtml(data.texto || "")}</p>`;
   }
-  brief.innerHTML = `
-    ${title}
-    ${body}
-    <p class="brief-meta">${escapeHtml(data.n_noticias)} articles - ${escapeHtml(data.modelo)} - ${escapeHtml(formatDate(data.fecha_generacion))}</p>
+  const meta = `${escapeHtml(data.n_noticias)} articles - ${escapeHtml(data.modelo)} - ${escapeHtml(formatDate(data.fecha_generacion))}`;
+  brief.innerHTML = renderCurrentBriefShell(body, meta);
+  bindCurrentBriefToggle();
+}
+
+function renderCurrentBriefShell(body, meta) {
+  return `
+    <button class="daily-brief-toggle current-brief-toggle" type="button" data-current-brief-toggle aria-expanded="true" aria-controls="today-brief-body">
+      <span>
+        <small>Today</small>
+        <strong>Executive summary</strong>
+        ${meta ? `<small>${meta}</small>` : ""}
+      </span>
+      <span class="daily-brief-chevron" aria-hidden="true"></span>
+    </button>
+    <div id="today-brief-body" class="daily-brief-body current-brief-body">${body}</div>
   `;
+}
+
+function bindCurrentBriefToggle() {
+  const button = brief.querySelector("[data-current-brief-toggle]");
+  if (button) {
+    button.addEventListener("click", () => toggleDailyBrief(button));
+  }
 }
 
 function renderBriefBody(data) {
@@ -465,14 +490,34 @@ function renderDailyBriefs(items) {
     return;
   }
   dailyBriefsList.innerHTML = items
-    .map((item) => `
+    .map((item, index) => {
+      const detailId = `daily-brief-${index}`;
+      const expanded = index === 0;
+      return `
       <article class="daily-brief-card">
-        <h4>${escapeHtml(item.fecha)}</h4>
-        <p class="daily-brief-meta">${escapeHtml(item.n_noticias)} articles - ${escapeHtml(item.modelo)} - ${escapeHtml(formatDate(item.fecha_generacion))}</p>
-        <div class="daily-brief-body">${renderBriefBody(item)}</div>
+        <button class="daily-brief-toggle" type="button" data-daily-brief-toggle aria-expanded="${expanded}" aria-controls="${detailId}">
+          <span>
+            <strong>${escapeHtml(item.fecha)}</strong>
+            <small>${escapeHtml(item.n_noticias)} articles - ${escapeHtml(item.modelo)} - ${escapeHtml(formatDate(item.fecha_generacion))}</small>
+          </span>
+          <span class="daily-brief-chevron" aria-hidden="true"></span>
+        </button>
+        <div id="${detailId}" class="daily-brief-body" ${expanded ? "" : "hidden"}>${renderBriefBody(item)}</div>
       </article>
-    `)
+    `;
+    })
     .join("");
+  dailyBriefsList.querySelectorAll("[data-daily-brief-toggle]").forEach((button) => {
+    button.addEventListener("click", () => toggleDailyBrief(button));
+  });
+}
+
+function toggleDailyBrief(button) {
+  const detail = document.getElementById(button.getAttribute("aria-controls"));
+  if (!detail) return;
+  const expanded = button.getAttribute("aria-expanded") === "true";
+  button.setAttribute("aria-expanded", String(!expanded));
+  detail.hidden = expanded;
 }
 
 function renderFavorites(data) {
@@ -574,16 +619,42 @@ function renderFeed(data) {
 
 function bindArticleActions(root) {
   root.querySelectorAll("[data-summary]").forEach((button) => {
-    button.addEventListener("click", () => generateSummary(button.dataset.summary));
+    button.addEventListener("click", () => generateSummary(button.dataset.summary, button));
   });
   root.querySelectorAll("[data-favorite]").forEach((button) => {
     button.addEventListener("click", () => toggleFavorite(button.dataset.favorite, button));
   });
+  root.querySelectorAll("[data-media-image]").forEach((button) => {
+    button.addEventListener("click", () => openMediaModal(button.dataset.mediaImage, button.dataset.mediaTitle || ""));
+  });
+}
+
+function renderMediaPreview(item) {
+  if (!item.media_url) return "";
+  const title = item.label || item.titulo || "Article media";
+  const mediaUrl = escapeHtml(item.media_url);
+  const sourceUrl = escapeHtml(item.media_source_url || item.url || "");
+  const safeTitle = escapeHtml(title);
+  const image = `<img src="${mediaUrl}" alt="${safeTitle}" loading="lazy" onerror="this.closest('.article-media')?.remove()">`;
+  if (item.media_type === "video") {
+    return `
+      <a class="article-media article-media-video" href="${sourceUrl}" target="_blank" rel="noreferrer" aria-label="Open video source">
+        ${image}
+        <span class="media-play" aria-hidden="true"></span>
+      </a>
+    `;
+  }
+  return `
+    <button class="article-media article-media-image" type="button" data-media-image="${mediaUrl}" data-media-title="${safeTitle}" aria-label="Open image preview">
+      ${image}
+    </button>
+  `;
 }
 
 function renderArticle(item) {
   const titleParts = splitStarTitle(item.label || item.titulo);
-  const summary = hasSummary(item) ? item.resumen_ia : item.descripcion;
+  const isRepository = item.fuente === "GitHub Trending";
+  const summary = isRepository ? item.descripcion : (hasSummary(item) ? item.resumen_ia : item.descripcion);
   const time = formatDate(item.fuente === "GitHub Trending" ? item.fecha_ingesta : item.fecha_publicacion);
   const tags = (item.tags || []).slice(0, 4).map((tag) => `<span class="tag">${escapeHtml(tag)}</span>`).join("");
   const metric = item.fuente === "GitHub Trending"
@@ -594,9 +665,14 @@ function renderArticle(item) {
   const discussion = item.discussion_url
     ? `<a href="${escapeHtml(item.discussion_url)}" target="_blank" rel="noreferrer">${escapeHtml(item.comments)} comments</a>`
     : "";
-  const summaryAction = hasSummary(item)
+  const summaryAction = hasSummary(item) || isRepository
     ? ""
-    : `<button type="button" data-summary="${escapeHtml(item.id)}">Generate summary</button>`;
+    : `
+      <button type="button" class="summary-button" data-summary="${escapeHtml(item.id)}">
+        <span class="summary-button-label">Generate summary</span>
+        <span class="summary-spinner" aria-hidden="true"></span>
+      </button>
+    `;
   const favoriteLabel = item.is_favorite ? "Remove from favorites" : "Add to favorites";
   const favoriteButton = `
     <button
@@ -612,26 +688,33 @@ function renderArticle(item) {
       </svg>
     </button>
   `;
+  const starMetric = titleParts.stars ? `<div class="article-star-metric">${renderStarCount(titleParts.stars)}</div>` : "";
+  const mediaPreview = renderMediaPreview(item);
+  const visualRail = starMetric || mediaPreview
+    ? `<aside class="article-visual" aria-label="Article visual details">${starMetric}${mediaPreview}</aside>`
+    : "";
 
   return `
-    <article class="article" id="article-${escapeHtml(item.id)}">
+    <article class="article${visualRail ? " has-visual" : ""}${item.media_url ? " has-media" : ""}" id="article-${escapeHtml(item.id)}">
       <div class="article-top">
-        <div>
+        <div class="article-meta-stack">
           <div class="article-meta">${escapeHtml(item.fuente)}${time ? ` - ${escapeHtml(time)}` : ""}</div>
           <div class="badge-row"><span class="badge">${escapeHtml(item.area_label)}</span></div>
         </div>
-        <div class="article-side">
+        <div class="article-controls">
           <div class="score">${Number(item.selected_score || 0).toFixed(0)}</div>
           ${favoriteButton}
         </div>
       </div>
-      <div class="article-title-row">
-        <h4>${escapeHtml(titleParts.title)}</h4>
-        ${titleParts.stars ? `<div class="article-star-metric">${renderStarCount(titleParts.stars)}</div>` : ""}
+      <div class="article-main">
+        <div class="article-content">
+          <h4 class="article-heading">${escapeHtml(titleParts.title)}</h4>
+          ${summary ? `<p class="article-summary">${escapeHtml(summary)}</p>` : ""}
+          ${tags ? `<div class="tag-row">${tags}</div>` : ""}
+          ${item.selection_reason ? `<p class="article-reason">${escapeHtml(item.selection_reason)}</p>` : ""}
+        </div>
+        ${visualRail}
       </div>
-      ${summary ? `<p class="article-summary">${escapeHtml(summary).slice(0, 420)}</p>` : ""}
-      ${tags ? `<div class="tag-row">${tags}</div>` : ""}
-      ${item.selection_reason ? `<p class="article-reason">${escapeHtml(item.selection_reason)}</p>` : ""}
       <div class="article-foot">
         <span>${escapeHtml(metric || (item.ranking ? `Ranking #${item.ranking}` : "Trending"))}</span>
         <div class="article-actions">
@@ -644,15 +727,44 @@ function renderArticle(item) {
   `;
 }
 
-async function generateSummary(articleId) {
+async function generateSummary(articleId, button) {
+  if (button) {
+    button.disabled = true;
+    button.classList.add("is-generating");
+    button.setAttribute("aria-busy", "true");
+  }
   setStatus("Generating summary...");
   try {
     const result = await fetchJson(`/api/articles/${encodeURIComponent(articleId)}/summary`, { method: "POST" });
     setStatus(result.cached ? "Summary already exists." : "Summary generated.");
-    await loadAll();
+    if (result.summary) {
+      applyGeneratedSummary(articleId, result.summary, button);
+    }
   } catch (error) {
     setStatus(error.message, true);
+  } finally {
+    if (button && button.isConnected) {
+      button.disabled = false;
+      button.classList.remove("is-generating");
+      button.removeAttribute("aria-busy");
+    }
   }
+}
+
+function applyGeneratedSummary(articleId, summary, button) {
+  const article = document.getElementById(`article-${articleId}`);
+  if (!article) return;
+  const existingSummary = article.querySelector(".article-summary");
+  const cleanSummary = String(summary || "");
+  if (existingSummary) {
+    existingSummary.textContent = cleanSummary;
+  } else {
+    const heading = article.querySelector(".article-heading");
+    if (heading) {
+      heading.insertAdjacentHTML("afterend", `<p class="article-summary">${escapeHtml(cleanSummary)}</p>`);
+    }
+  }
+  button?.remove();
 }
 
 async function toggleFavorite(articleId, button) {
@@ -664,11 +776,9 @@ async function toggleFavorite(articleId, button) {
     });
     if (state.view === "favorites" && !result.is_favorite) {
       await loadFavorites();
-      setStatus("Removed from favorites.");
       return;
     }
     updateFavoriteButtons(articleId, Boolean(result.is_favorite));
-    setStatus(result.is_favorite ? "Saved to favorites." : "Removed from favorites.");
   } catch (error) {
     setStatus(error.message, true);
   } finally {
@@ -684,6 +794,21 @@ function updateFavoriteButtons(articleId, isFavorite) {
     button.setAttribute("title", isFavorite ? "Remove from favorites" : "Add to favorites");
     button.setAttribute("aria-label", isFavorite ? "Remove from favorites" : "Add to favorites");
   });
+}
+
+function openMediaModal(src, title) {
+  if (!mediaModal || !mediaModalImage || !src) return;
+  mediaModalImage.src = src;
+  mediaModalImage.alt = title || "Article image preview";
+  mediaModal.hidden = false;
+  mediaModalClose?.focus();
+}
+
+function closeMediaModal() {
+  if (!mediaModal || !mediaModalImage) return;
+  mediaModal.hidden = true;
+  mediaModalImage.removeAttribute("src");
+  mediaModalImage.alt = "";
 }
 
 function submitSearch() {
@@ -839,6 +964,15 @@ clearSearch.addEventListener("click", () => {
   state.query = "";
   suggestions.hidden = true;
   loadAll();
+});
+mediaModalClose?.addEventListener("click", closeMediaModal);
+mediaModal?.addEventListener("click", (event) => {
+  if (event.target === mediaModal) closeMediaModal();
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && mediaModal && !mediaModal.hidden) {
+    closeMediaModal();
+  }
 });
 
 initSidebar();

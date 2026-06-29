@@ -12,8 +12,8 @@ from unittest.mock import patch
 from sqlalchemy import create_engine, inspect
 from sqlalchemy.orm import sessionmaker
 
-from src.database import Base, MacroResumen, Noticia
-from src import database, web_services
+from src.database import Base, DynamicKeyword, MacroResumen, Noticia
+from src import database, dynamic_keywords, web_services
 
 
 class WebServiceTestCase(unittest.TestCase):
@@ -36,8 +36,11 @@ class WebServiceTestCase(unittest.TestCase):
 
         self.session_patch = patch.object(web_services, "get_session", temporary_session)
         self.session_patch.start()
+        self.dynamic_session_patch = patch.object(dynamic_keywords, "get_session", temporary_session)
+        self.dynamic_session_patch.start()
 
     def tearDown(self) -> None:
+        self.dynamic_session_patch.stop()
         self.session_patch.stop()
         self.engine.dispose()
 
@@ -49,6 +52,9 @@ class WebServiceTestCase(unittest.TestCase):
         area: str,
         score: float,
         published_at: datetime | None = None,
+        url: str | None = None,
+        media_url: str | None = None,
+        media_type: str | None = None,
     ) -> None:
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
@@ -56,7 +62,7 @@ class WebServiceTestCase(unittest.TestCase):
                 Noticia(
                     id=article_id,
                     titulo=title,
-                    url=f"https://example.test/{article_id}",
+                    url=url or f"https://example.test/{article_id}",
                     fuente=source,
                     descripcion_original=f"{title} description",
                     resumen_ia="Resumen no disponible",
@@ -65,6 +71,9 @@ class WebServiceTestCase(unittest.TestCase):
                     fecha_ingesta=now,
                     selected_score=score,
                     tags_json=json.dumps(["agents"]),
+                    media_url=media_url,
+                    media_type=media_type,
+                    media_source_url=url if media_url else None,
                 )
             )
             session.commit()
@@ -105,8 +114,34 @@ class WebServiceTestCase(unittest.TestCase):
         self.assertEqual([item["id"] for item in result["items"]], ["keep"])
         self.assertEqual(result["count"], 1)
 
+    def test_feed_deduplicates_repeated_articles_by_url_after_sorting(self) -> None:
+        today = datetime.now(web_services.BRIEF_TIMEZONE).date().isoformat()
+        repo_url = "https://github.com/calesthio/OpenMontage"
+        self.add_article(
+            "repo-old",
+            "[GitHub] calesthio/OpenMontage ⭐23,576 (+1,674 stars today)",
+            "GitHub Trending",
+            "developer_tools",
+            89,
+            url=repo_url,
+        )
+        self.add_article(
+            "repo-new",
+            "[GitHub] calesthio/OpenMontage ⭐23,669 (+1,754 stars today)",
+            "GitHub Trending",
+            "developer_tools",
+            90,
+            url=f"{repo_url}/",
+        )
+        self.add_article("other", "Different repository", "GitHub Trending", "developer_tools", 80)
+
+        result = web_services.get_feed(fecha=today, fuentes=["GitHub Trending"])
+
+        self.assertEqual([item["id"] for item in result["items"]], ["repo-new", "other"])
+        self.assertEqual(result["count"], 2)
+
     def test_hot_topics_require_three_distinct_sources_and_pick_highest_score(self) -> None:
-        today = datetime.now(timezone.utc).date().isoformat()
+        today = datetime.now(web_services.BRIEF_TIMEZONE).date().isoformat()
         self.add_article("openai-low", "OpenAI GPT launch expands agents", "Reuters", "ai_agents", 71)
         self.add_article("openai-lead", "OpenAI GPT launch expands enterprise agents", "OpenAI Blog", "ai_agents", 93)
         self.add_article("openai-mid", "OpenAI GPT launch covered by developers", "Hacker News", "ai_agents", 86)
@@ -123,8 +158,28 @@ class WebServiceTestCase(unittest.TestCase):
         self.assertEqual(topics[0]["sources"], ["Hacker News", "OpenAI Blog", "Reuters"])
         self.assertEqual([item["id"] for item in topics[0]["supporting_items"]], ["openai-lead", "openai-mid", "openai-low"])
 
+    def test_hot_topics_group_shared_model_version_across_different_wording(self) -> None:
+        today = datetime.now(web_services.BRIEF_TIMEZONE).date()
+        self.add_article("gpt-hn-1", "Previewing GPT‑5.6 Sol: a next-generation model", "Hacker News", "ai_agents", 89)
+        self.add_article("gpt-openai", "Previewing GPT-5.6 Sol: a next-generation model", "OpenAI Blog", "cybersecurity", 91)
+        self.add_article("gpt-hn-2", "U.S. government will decide who gets to use GPT-5.6", "Hacker News", "ai_agents", 88)
+        self.add_article("gpt-reuters", "OpenAI defers public rollout of GPT‑5.6 as US seeks early access to frontier AI", "Reuters", "ai_agents", 87)
+        self.add_article("other-model", "GPT-5.5 prompt leaks mention OpenAI and frontier AI", "GitHub Trending", "ai_agents", 99)
+        self.add_article("model-free-ai", "A design format gives coding agents structured understanding", "GitHub Trending", "developer_tools", 98)
+
+        topics = web_services.get_hot_topics(today)
+
+        self.assertEqual(topics[0]["topic"], "GPT-5.6")
+        self.assertEqual(topics[0]["representative_id"], "gpt-openai")
+        self.assertEqual(topics[0]["source_count"], 3)
+        self.assertEqual(topics[0]["items"], 4)
+        self.assertEqual(topics[0]["sources"], ["Hacker News", "OpenAI Blog", "Reuters"])
+        supporting_ids = [item["id"] for item in topics[0]["supporting_items"]]
+        self.assertNotIn("other-model", supporting_ids)
+        self.assertNotIn("model-free-ai", supporting_ids)
+
     def test_feed_filters_do_not_change_date_level_hot_topics(self) -> None:
-        today = datetime.now(timezone.utc).date().isoformat()
+        today = datetime.now(web_services.BRIEF_TIMEZONE).date().isoformat()
         self.add_article("openai-r", "OpenAI agent launch details", "Reuters", "ai_agents", 80)
         self.add_article("openai-o", "OpenAI agent launch details for teams", "OpenAI Blog", "ai_agents", 90)
         self.add_article("openai-h", "OpenAI agent launch details discussion", "Hacker News", "ai_agents", 75)
@@ -137,7 +192,7 @@ class WebServiceTestCase(unittest.TestCase):
         self.assertEqual(result["hot_topics"][0]["source_count"], 3)
 
     def test_hot_topics_sort_by_source_count_then_score(self) -> None:
-        today = datetime.now(timezone.utc).date()
+        today = datetime.now(web_services.BRIEF_TIMEZONE).date()
         for article_id, source, score in [
             ("openai-1", "Reuters", 60),
             ("openai-2", "OpenAI Blog", 60),
@@ -155,7 +210,7 @@ class WebServiceTestCase(unittest.TestCase):
         self.assertEqual([topic["topic"] for topic in topics[:2]], ["OpenAI", "Security"])
 
     def test_hot_topics_empty_when_no_multi_source_cluster(self) -> None:
-        today = datetime.now(timezone.utc).date()
+        today = datetime.now(web_services.BRIEF_TIMEZONE).date()
         self.add_article("only-one", "OpenAI standalone update", "OpenAI Blog", "ai_agents", 90)
         self.add_article("only-two-a", "Security incident report", "Reuters", "cybersecurity", 80)
         self.add_article("only-two-b", "Security incident analysis", "Hacker News", "cybersecurity", 81)
@@ -163,7 +218,7 @@ class WebServiceTestCase(unittest.TestCase):
         self.assertEqual(web_services.get_hot_topics(today), [])
 
     def test_brief_returns_structured_json_when_available(self) -> None:
-        today = datetime.now(timezone.utc).date()
+        today = datetime.now(web_services.BRIEF_TIMEZONE).date()
         payload = {"intro": "Brief intro", "items": [], "trend_reading": "Trend"}
         with self.session_factory() as session:
             session.add(
@@ -194,7 +249,7 @@ class WebServiceTestCase(unittest.TestCase):
         self.assertIn("GEMINI_API_KEY", result["reason"])
 
     def test_suggestions_require_two_characters_and_limit_results(self) -> None:
-        today = datetime.now(timezone.utc).date().isoformat()
+        today = datetime.now(web_services.BRIEF_TIMEZONE).date().isoformat()
         for index, score in enumerate([10, 80, 60, 70, 90, 50]):
             self.add_article(f"item-{index}", f"Agent story {index}", "GitHub Blog", "ai_agents", score)
 
@@ -238,6 +293,71 @@ class WebServiceTestCase(unittest.TestCase):
 
         self.assertIn("is_favorite", columns)
         self.assertIn("favorited_at", columns)
+
+    def test_media_columns_are_declared_and_serialized(self) -> None:
+        columns = {column["name"] for column in inspect(self.engine).get_columns("noticias")}
+        self.assertIn("media_url", columns)
+        self.assertIn("media_type", columns)
+        self.assertIn("media_source_url", columns)
+
+        today = datetime.now(web_services.BRIEF_TIMEZONE).date().isoformat()
+        self.add_article(
+            "media-story",
+            "Story with image",
+            "OpenAI Blog",
+            "ai_agents",
+            91,
+            url="https://openai.com/news/story",
+            media_url="https://cdn.example.test/story.jpg",
+            media_type="image",
+        )
+
+        item = web_services.get_feed(fecha=today)["items"][0]
+
+        self.assertEqual(item["media_url"], "https://cdn.example.test/story.jpg")
+        self.assertEqual(item["media_type"], "image")
+        self.assertEqual(item["media_source_url"], "https://openai.com/news/story")
+
+    def test_dynamic_keywords_promote_emerging_multi_word_terms(self) -> None:
+        self.add_article("vibe-1", "Vibe coding loop tools for AI agents", "Hacker News", "ai_agents", 88)
+        self.add_article("vibe-2", "Developers adopt vibe coding skill loops", "GitHub Blog", "developer_tools", 84)
+        self.add_article("vibe-3", "New vibe coding workflow improves agent skill routing", "GitHub Trending", "ai_agents", 82)
+
+        items = dynamic_keywords.discover_dynamic_keywords()
+        terms = {item["term"] for item in items}
+
+        self.assertIn("vibe coding", terms)
+        self.assertTrue(all("openai" != term for term in terms))
+        self.assertTrue(all("airpods" != term for term in terms))
+
+    def test_dynamic_keyword_scoring_boost_is_guarded(self) -> None:
+        from src.scoring import calculate_item_score
+
+        now = datetime.now(timezone.utc)
+        relevant = {
+            "titulo": "Vibe coding workflow improves AI agent loops",
+            "descripcion_original": "A developer SDK for OpenAI coding agents.",
+            "fuente": "GitHub Blog",
+            "area_matcheada": "ai_agents",
+            "fecha_ingesta": now,
+        }
+        off_topic = {
+            "titulo": "LibrePods: AirPods liberated",
+            "descripcion_original": "Open source firmware for Android bluetooth earbuds.",
+            "fuente": "Hacker News",
+            "area_matcheada": "ai_agents",
+            "fecha_ingesta": now,
+            "score": 150,
+            "num_comentarios": 41,
+        }
+
+        base = calculate_item_score(relevant, now=now)
+        boosted = calculate_item_score(relevant, now=now, dynamic_keywords=["vibe coding"])
+        capped = calculate_item_score(off_topic, now=now, dynamic_keywords=["open source firmware"])
+
+        self.assertGreater(boosted.selected_score, base.selected_score)
+        self.assertEqual(boosted.components["dynamic_keyword_matches"], ["vibe coding"])
+        self.assertLessEqual(capped.selected_score, 48)
 
     def test_mark_and_remove_favorite(self) -> None:
         self.add_article("fav-1", "Favorite story", "Reuters", "ai_agents", 82)
@@ -331,6 +451,16 @@ class WebApiRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"updating": False})
 
+    def test_dynamic_keywords_route_returns_items(self) -> None:
+        from fastapi.testclient import TestClient
+        import web_app
+
+        with patch.object(web_app.web_services, "get_dynamic_keywords", return_value={"items": [{"term": "vibe coding"}]}):
+            response = TestClient(web_app.app).get("/api/dynamic-keywords")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["items"][0]["term"], "vibe coding")
+
     def test_daily_briefs_route_returns_items(self) -> None:
         from fastapi.testclient import TestClient
         import web_app
@@ -410,6 +540,9 @@ class WebApiRouteTests(unittest.TestCase):
         scheduler = web_app.create_scheduler()
         try:
             self.assertIsNotNone(scheduler.get_job(web_app.REFRESH_JOB_ID))
+            daily_job = scheduler.get_job(web_app.DAILY_BRIEF_JOB_ID)
+            self.assertIsNotNone(daily_job)
+            self.assertEqual(str(daily_job.trigger), "cron[hour='8', minute='0']")
         finally:
             if scheduler.running:
                 scheduler.shutdown(wait=False)
@@ -448,6 +581,12 @@ class WebUiStaticTests(unittest.TestCase):
         styles = Path("static/app.css").read_text(encoding="utf-8")
 
         self.assertIn("Today&rsquo;s Updates", template)
+        self.assertIn('rel="icon"', template)
+        self.assertIn("/assets/favicon.png?v=logo-v1", template)
+        self.assertIn('rel="apple-touch-icon"', template)
+        self.assertIn("/assets/apple-touch-icon.png?v=logo-v1", template)
+        self.assertGreater(Path("assets/favicon.png").stat().st_size, 0)
+        self.assertGreater(Path("assets/apple-touch-icon.png").stat().st_size, 0)
         self.assertIn(r"Today\u2019s Updates", script)
         self.assertIn('aria-label="Today’s Updates"', template)
         self.assertIn("Daily Briefs", template)
@@ -474,12 +613,32 @@ class WebUiStaticTests(unittest.TestCase):
         self.assertIn("favorite-button", script)
         self.assertIn("Add to favorites", script)
         self.assertIn("Remove from favorites", script)
+        self.assertIn('item.fuente === "GitHub Trending"', script)
+        self.assertIn("const summary = isRepository ? item.descripcion", script)
+        self.assertIn("summary-button", script)
+        self.assertIn("summary-spinner", script)
+        self.assertIn("is-generating", script)
+        self.assertIn('button.setAttribute("aria-busy", "true")', script)
+        self.assertIn("function applyGeneratedSummary", script)
+        self.assertNotIn("escapeHtml(summary).slice(0, 420)", script)
+        self.assertNotIn("String(summary || \"\").slice(0, 420)", script)
+        self.assertIn("function renderMediaPreview", script)
+        self.assertIn("data-media-image", script)
+        self.assertIn("article-media-video", script)
+        self.assertIn("function openMediaModal", script)
+        self.assertIn("function closeMediaModal", script)
+        self.assertIn('id="media-modal"', template)
+        self.assertIn('id="media-modal-image"', template)
+        generate_summary_block = script.split("async function generateSummary", maxsplit=1)[1].split("async function toggleFavorite", maxsplit=1)[0]
+        self.assertNotIn("await loadAll()", generate_summary_block)
         favorite_markup = script.split('const favoriteButton = `', maxsplit=1)[1].split("  return `", maxsplit=1)[0]
         self.assertNotIn("<span>", favorite_markup)
         self.assertIn("M8 13.8", script)
         self.assertIn("Use the heart button", script)
-        self.assertIn("/static/app.js?v=selected-date-title-v1", template)
-        self.assertIn("/static/app.css?v=selected-date-title-v1", template)
+        self.assertNotIn("Saved to favorites.", script)
+        self.assertNotIn("Removed from favorites.", script)
+        self.assertIn("/static/app.js?v=favorite-status-v1", template)
+        self.assertIn("/static/app.css?v=favorite-status-v1", template)
         topbar = template.split('class="topbar"', maxsplit=1)[1].split('id="status"', maxsplit=1)[0]
         self.assertNotIn("Command center", topbar)
         self.assertIn('id="topbar-date"', template)
@@ -489,13 +648,34 @@ class WebUiStaticTests(unittest.TestCase):
         self.assertNotIn("topbarEyebrow", script)
         self.assertIn('search.value = ""', script)
         self.assertIn("archive-empty", script)
+        self.assertIn("data-daily-brief-toggle", script)
+        self.assertIn("data-current-brief-toggle", script)
+        self.assertIn("function renderCurrentBriefShell", script)
+        self.assertIn("function bindCurrentBriefToggle", script)
+        self.assertIn("function toggleDailyBrief", script)
+        self.assertIn("daily-brief-chevron", script)
         self.assertIn(".mode-nav", styles)
+        self.assertIn("#brief", styles)
+        self.assertIn(".current-brief-body", styles)
+        self.assertIn(".daily-brief-toggle", styles)
+        self.assertIn(".daily-brief-chevron", styles)
         self.assertIn(".topbar-date", styles)
         archive_window_styles = styles.split(".archive-window {", maxsplit=1)[1].split("}", maxsplit=1)[0]
         self.assertIn("text-align: center", archive_window_styles)
         self.assertIn(".favorites-view", styles)
         self.assertIn(".favorites-feed-list", styles)
         self.assertIn(".favorite-button", styles)
+        self.assertIn(".summary-spinner", styles)
+        self.assertIn("@keyframes summary-spin", styles)
+        self.assertIn(".article-media", styles)
+        self.assertIn("article-main", script)
+        self.assertIn("article-visual", script)
+        self.assertIn("article-controls", script)
+        self.assertIn(".article.has-visual .article-main", styles)
+        self.assertIn("grid-template-columns: minmax(0, 1fr) minmax(190px, 240px)", styles)
+        self.assertIn("max-width: min(250px, 100%)", styles)
+        self.assertIn(".media-modal", styles)
+        self.assertIn(".media-play", styles)
         self.assertIn("border-radius: 50%", styles)
         self.assertIn("background: rgba(255, 80, 134, 0.13)", styles)
         self.assertNotIn("background: #ffe2ec", styles)
@@ -557,7 +737,7 @@ class WebUiStaticTests(unittest.TestCase):
         self.assertNotIn("<h1>Newser</h1>", brand_block)
         self.assertIn("brand-tagline", brand_block)
         self.assertIn("IT News Trend Analyzer", brand_block)
-        self.assertIn("width: 92px", styles)
+        self.assertIn("width: 86px", styles)
         self.assertIn('id="sidebar-toggle"', template)
         self.assertIn('class="nav-icon"', template)
         self.assertNotIn("data-short=", template)
@@ -570,7 +750,7 @@ class WebUiStaticTests(unittest.TestCase):
         self.assertIn("newser.sidebarCollapsed.desktop", script)
         self.assertIn("const shouldCollapse = saved === null ? isMobile", script)
         self.assertIn("body.sidebar-collapsed", styles)
-        self.assertIn("grid-template-columns: 92px minmax(0, 1fr)", styles)
+        self.assertIn("grid-template-columns: 78px minmax(0, 1fr)", styles)
         self.assertIn("height: calc(72px + env(safe-area-inset-top, 0px))", styles)
 
     def test_github_star_titles_use_svg_icon(self) -> None:
@@ -582,7 +762,8 @@ class WebUiStaticTests(unittest.TestCase):
         self.assertIn("function renderStarCount", script)
         self.assertIn("github-star-count", script)
         self.assertIn("<svg viewBox", script)
-        self.assertIn("article-title-row", script)
+        self.assertIn("article-heading", script)
+        self.assertIn("article-visual", script)
         self.assertIn("article-star-metric", script)
         self.assertIn("topic-title-row", script)
         self.assertIn("topic-star-metric", script)
@@ -617,7 +798,7 @@ class WebUiStaticTests(unittest.TestCase):
         styles = Path("static/app.css").read_text(encoding="utf-8")
 
         self.assertIn('class="feed-block"', template)
-        self.assertIn("grid-template-columns: 300px minmax(0, 1fr)", styles)
+        self.assertIn("grid-template-columns: clamp(236px, 22vw, 268px) minmax(0, 1fr)", styles)
         self.assertIn("scrollbar-gutter: stable", styles)
         self.assertIn(".workspace > *", styles)
         self.assertIn("width: 100%", styles)

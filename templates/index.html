@@ -4,7 +4,9 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Newser</title>
-  <link rel="stylesheet" href="/static/app.css?v=selected-date-title-v1">
+  <link rel="icon" type="image/png" href="/assets/favicon.png?v=logo-v1">
+  <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png?v=logo-v1">
+  <link rel="stylesheet" href="/static/app.css?v=favorite-status-v1">
 </head>
 <body>
   <aside class="sidebar">
@@ -249,6 +251,11 @@
     </section>
   </main>
 
-  <script src="/static/app.js?v=selected-date-title-v1"></script>
+  <div id="media-modal" class="media-modal" hidden role="dialog" aria-modal="true" aria-label="Image preview">
+    <button id="media-modal-close" class="media-modal-close" type="button" aria-label="Close image preview">x</button>
+    <img id="media-modal-image" alt="">
+  </div>
+
+  <script src="/static/app.js?v=favorite-status-v1"></script>
 </body>
 </html>

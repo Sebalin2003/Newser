@@ -97,6 +97,80 @@ class TestArticleScoring(unittest.TestCase):
             calculate_item_score(old, now=now).selected_score,
         )
 
+    def test_consumer_airpods_story_is_not_ranked_as_ai(self) -> None:
+        from datetime import datetime, timezone
+
+        from src.scoring import calculate_item_score
+
+        now = datetime(2026, 6, 28, 16, tzinfo=timezone.utc)
+        item = {
+            "titulo": "LibrePods: AirPods liberated",
+            "descripcion_original": (
+                "LibrePods busca liberar a los Apple AirPods de su ecosistema "
+                "cerrado mediante ingeniería inversa y firmware de código abierto."
+            ),
+            "fuente": "Hacker News",
+            "area_matcheada": "ai_agents",
+            "fecha_ingesta": now,
+            "score": 150,
+            "num_comentarios": 41,
+        }
+
+        result = calculate_item_score(item, now=now)
+
+        self.assertLessEqual(result.selected_score, 48)
+        self.assertNotIn("AI", result.tags)
+        self.assertLess(result.components["relevance_quality"], 35)
+
+    def test_strong_ai_and_security_stories_still_score_highly(self) -> None:
+        from datetime import datetime, timezone
+
+        from src.scoring import calculate_item_score
+
+        now = datetime(2026, 6, 28, 16, tzinfo=timezone.utc)
+        ai_item = {
+            "titulo": "OpenAI releases new agent model for developers",
+            "descripcion_original": "The LLM improves inference and coding workflows.",
+            "fuente": "OpenAI Blog",
+            "area_matcheada": "ai_agents",
+            "fecha_ingesta": now,
+        }
+        security_item = {
+            "titulo": "Critical security vulnerability disclosed in developer platform",
+            "descripcion_original": "Researchers published exploit details and mitigation guidance.",
+            "fuente": "Reuters",
+            "area_matcheada": "cybersecurity",
+            "fecha_ingesta": now,
+        }
+
+        self.assertGreaterEqual(calculate_item_score(ai_item, now=now).selected_score, 80)
+        self.assertGreaterEqual(calculate_item_score(security_item, now=now).selected_score, 70)
+
+    def test_ingestion_keyword_matching_does_not_match_ai_inside_airpods(self) -> None:
+        from src.relevance import classify_relevance
+
+        areas = {
+            "ai_agents": ["ai", "agent", "openai"],
+            "developer_tools": ["developer", "open source", "api"],
+        }
+
+        relevant, area = classify_relevance(
+            "LibrePods: AirPods liberated",
+            "Open source firmware for Android bluetooth earbuds.",
+            areas,
+        )
+
+        self.assertFalse(relevant)
+        self.assertEqual(area, "")
+
+        relevant_ai, area_ai = classify_relevance(
+            "OpenAI releases an AI agent SDK",
+            "A developer API for model workflows.",
+            areas,
+        )
+        self.assertTrue(relevant_ai)
+        self.assertEqual(area_ai, "ai_agents")
+
 
 class TestFeedPublicationTime(unittest.TestCase):
     def test_formats_source_publication_time_in_utc(self) -> None:
@@ -475,11 +549,112 @@ class TestHybridPayload(unittest.TestCase):
 
         with patch.object(processor, "GEMINI_AVAILABLE", True), \
             patch.object(processor, "GEMINI_API_KEY", "key"), \
+            patch.object(processor, "GEMINI_MODEL", "gemini-3.1-flash-lite"), \
             patch.object(processor.google_genai, "Client", return_value=fake_client):
             result = processor._llamar_gemini("prompt")
 
         self.assertIsNone(result)
-        self.assertEqual(fake_model.calls, 1)
+        self.assertEqual(fake_model.calls, 2)
+        self.assertIn("gemini-2.5-flash-lite", processor.LAST_GEMINI_ERROR)
+
+    def test_gemini_default_model_and_fallback_order(self) -> None:
+        import src.processor as processor
+
+        with patch.object(processor, "GEMINI_MODEL", processor.DEFAULT_GEMINI_MODEL):
+            self.assertEqual(processor.GEMINI_MODEL, "gemini-3.1-flash-lite")
+            self.assertEqual(
+                processor._gemini_candidate_models(),
+                ["gemini-3.1-flash-lite", "gemini-2.5-flash-lite"],
+            )
+
+    def test_gemini_env_override_stays_first_with_safe_fallbacks(self) -> None:
+        import src.processor as processor
+
+        with patch.object(processor, "GEMINI_MODEL", "custom-model"):
+            self.assertEqual(
+                processor._gemini_candidate_models(),
+                ["custom-model", "gemini-3.1-flash-lite", "gemini-2.5-flash-lite"],
+            )
+
+    def test_gemini_deprecated_env_model_is_not_used(self) -> None:
+        import importlib
+        import os
+        import src.processor as processor
+
+        previous = os.environ.get("GEMINI_MODEL")
+        try:
+            os.environ["GEMINI_MODEL"] = "gemini-2.0-flash"
+            reloaded = importlib.reload(processor)
+            self.assertEqual(reloaded.GEMINI_MODEL, "gemini-3.1-flash-lite")
+            self.assertNotIn("gemini-2.0-flash", reloaded._gemini_candidate_models())
+        finally:
+            if previous is None:
+                os.environ.pop("GEMINI_MODEL", None)
+            else:
+                os.environ["GEMINI_MODEL"] = previous
+            importlib.reload(processor)
+
+    def test_article_summary_prompt_no_longer_requests_sentiment(self) -> None:
+        import src.processor as processor
+
+        prompt = processor._PROMPT_RESUMEN.format(titulo="Example title")
+
+        self.assertIn("'resumen'", prompt)
+        self.assertIn("máximo 3 frases", prompt)
+        self.assertNotIn("sentimiento", prompt.lower())
+        self.assertNotIn("positivo", prompt.lower())
+        self.assertNotIn("negativo", prompt.lower())
+
+    def test_interactive_gemini_uses_fast_generation_config(self) -> None:
+        import src.processor as processor
+
+        class FakeModel:
+            def __init__(self) -> None:
+                self.kwargs = None
+
+            def generate_content(self, **kwargs):
+                self.kwargs = kwargs
+                return type("Response", (), {"text": '{"resumen":"ok"}'})()
+
+        fake_model = FakeModel()
+        fake_client = type("FakeClient", (), {"models": fake_model})()
+
+        with patch.object(processor, "GEMINI_AVAILABLE", True), \
+            patch.object(processor, "GEMINI_API_KEY", "key"), \
+            patch.object(processor.google_genai, "Client", return_value=fake_client):
+            result = processor._llamar_gemini("prompt", interactive=True)
+
+        self.assertEqual(result, '{"resumen":"ok"}')
+        self.assertIn("config", fake_model.kwargs)
+        config = fake_model.kwargs["config"]
+        self.assertEqual(config.max_output_tokens, 180)
+        self.assertEqual(config.response_mime_type, "application/json")
+        self.assertEqual(config.thinking_config.thinking_budget, 0)
+
+    def test_gemini_fallback_succeeds_after_primary_quota_error(self) -> None:
+        import src.processor as processor
+
+        class FakeModel:
+            calls: list[str] = []
+
+            def generate_content(self, model, contents):
+                self.calls.append(model)
+                if model == "gemini-3.1-flash-lite":
+                    raise Exception("429 RESOURCE_EXHAUSTED quota exceeded")
+                return type("Response", (), {"text": "ok"})()
+
+        fake_model = FakeModel()
+        fake_client = type("FakeClient", (), {"models": fake_model})()
+
+        with patch.object(processor, "GEMINI_AVAILABLE", True), \
+            patch.object(processor, "GEMINI_API_KEY", "key"), \
+            patch.object(processor, "GEMINI_MODEL", "gemini-3.1-flash-lite"), \
+            patch.object(processor.google_genai, "Client", return_value=fake_client):
+            result = processor._llamar_gemini("prompt")
+
+        self.assertEqual(result, "ok")
+        self.assertEqual(fake_model.calls, ["gemini-3.1-flash-lite", "gemini-2.5-flash-lite"])
+        self.assertEqual(processor.LAST_GEMINI_MODEL, "gemini-2.5-flash-lite")
 
     def test_gemini_availability_check_does_not_call_api(self) -> None:
         import src.processor as processor
