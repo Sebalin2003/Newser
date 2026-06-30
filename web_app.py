@@ -82,12 +82,21 @@ def index(request: Request):
 def api_feed(
     fecha: str | None = None,
     fuentes: Annotated[list[str] | None, Query()] = None,
+    prioritized_fuentes: Annotated[list[str] | None, Query()] = None,
     areas: Annotated[list[str] | None, Query()] = None,
     orden: str = "Puntaje",
     q: str | None = None,
     lang: str = "es",
 ):
-    return web_services.get_feed(fecha=fecha, fuentes=fuentes, areas=areas, orden=orden, q=q, lang=lang)
+    return web_services.get_feed(
+        fecha=fecha,
+        fuentes=fuentes,
+        prioritized_fuentes=prioritized_fuentes,
+        areas=areas,
+        orden=orden,
+        q=q,
+        lang=lang,
+    )
 
 
 @app.get("/api/brief")

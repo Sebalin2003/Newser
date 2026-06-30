@@ -38,6 +38,7 @@ HOT_TOPIC_MIN_SOURCES = 3
 HOT_TOPIC_SUPPORT_LIMIT = 5
 HOT_TOPIC_SIMILARITY_THRESHOLD = 0.42
 HOT_TOPIC_MODEL_ANCHORED_SIMILARITY_THRESHOLD = 0.62
+SOURCE_PRIORITY_SORT_BOOST = 4.0
 HOT_TOPIC_MODEL_PATTERN = re.compile(
     r"\b(?:gpt|claude|gemini|llama|mistral|qwen|deepseek|grok|o)\s*[-\u2010-\u2015\u2212]?\s*\d+(?:\.\d+)*\b",
     re.IGNORECASE,
@@ -338,6 +339,8 @@ def _sort_items(items: list[dict[str, Any]], order: str) -> list[dict[str, Any]]
         effective = _effective_datetime(item)
         ts = effective.timestamp() if effective else 0
         score = float(item.get("selected_score") or 0)
+        if order != "Mas reciente" and item.get("source_preference") == "prioritized":
+            score += SOURCE_PRIORITY_SORT_BOOST
         return (ts, score) if order == "Mas reciente" else (score, ts)
 
     return sorted(items, key=key, reverse=True)
@@ -384,6 +387,7 @@ def _dedupe_feed_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def get_feed(
     fecha: str | None = None,
     fuentes: list[str] | None = None,
+    prioritized_fuentes: list[str] | None = None,
     areas: list[str] | None = None,
     orden: str = "Puntaje",
     q: str | None = None,
@@ -395,6 +399,7 @@ def get_feed(
     all_dates = is_all_dates_filter(fecha)
     selected_date = None if all_dates else parse_filter_date(fecha)
     source_filter = [source for source in (fuentes or []) if source]
+    prioritized_sources = {source for source in (prioritized_fuentes or []) if source}
     area_filter = [area for area in (areas or []) if area]
     query_text = (q or "").strip()
     cutoff = datetime.now(timezone.utc) - timedelta(days=FILTER_WINDOW_DAYS)
@@ -419,6 +424,8 @@ def get_feed(
             query = query.filter(Noticia.area_matcheada.in_(area_filter_keys(area_filter)))
         rows = query.order_by(Noticia.fecha_ingesta.desc()).limit(300).all()
         items = [_serialize_article(row, config, selected_lang) for row in rows]
+    for item in items:
+        item["source_preference"] = "prioritized" if item.get("fuente") in prioritized_sources else "normal"
     if selected_date is not None:
         items = [item for item in items if _matches_date(item, selected_date)]
     items = _dedupe_feed_items(_sort_items(items, orden))[:limit]

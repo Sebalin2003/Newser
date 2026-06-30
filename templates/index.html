@@ -140,21 +140,18 @@
           </label>
         </fieldset>
       </div>
-
-      <div class="sidebar-section system-section">
-        <div class="sidebar-section-head">
-          <p class="eyebrow" data-i18n="system.status">Estado del sistema</p>
-          <span>Auto</span>
-        </div>
-        <button id="system-status-button" class="system-status-button" type="button" data-view-target="system">
-          <span>
-            <strong data-i18n="system.open">Abrir estado del sistema</strong>
-            <small data-i18n="system.openDesc">Salud, métricas y cobertura de fuentes.</small>
-          </span>
-        </button>
-      </div>
     </form>
-    <div class="sidebar-theme-section">
+    <div class="sidebar-theme-section preferences-section">
+      <div class="sidebar-section-head">
+        <p class="eyebrow" data-i18n="prefs.title">Preferencias</p>
+      </div>
+      <button type="button" class="preference-nav-button" data-view-target="sources" aria-label="Fuentes" data-i18n-aria-label="nav.sources">
+        <span>
+          <strong data-i18n="nav.sources">Fuentes</strong>
+          <small data-i18n="sources.mobileDesc">Preferencias guardadas para filtros y ranking.</small>
+        </span>
+        <span aria-hidden="true">&rsaquo;</span>
+      </button>
       <div class="language-toggle" role="group" aria-label="Idioma" data-i18n-aria-label="prefs.language">
         <button type="button" data-language-option="es" aria-pressed="true">ES</button>
         <button type="button" data-language-option="en" aria-pressed="false">EN</button>
@@ -247,17 +244,14 @@
     <section id="mobile-more" class="mobile-more-view" hidden>
       <div class="mobile-more-groups">
         <section class="mobile-more-card">
-          <p class="eyebrow" data-i18n="mobile.content">Contenido</p>
-          <button type="button" data-view-target="system">
+          <p class="eyebrow" data-i18n="prefs.title">Preferencias</p>
+          <button type="button" data-view-target="sources">
             <span>
-              <strong data-i18n="system.status">Estado del sistema</strong>
-              <small data-i18n="system.mobileDesc">Salud de actualización, métricas y fuentes.</small>
+              <strong data-i18n="nav.sources">Fuentes</strong>
+              <small data-i18n="sources.mobileDesc">Preferencias guardadas para filtros y ranking.</small>
             </span>
             <span aria-hidden="true">&rsaquo;</span>
           </button>
-        </section>
-        <section class="mobile-more-card">
-          <p class="eyebrow" data-i18n="prefs.title">Preferencias</p>
           <div class="mobile-setting-row">
             <span class="mobile-setting-copy">
               <strong data-i18n="prefs.language">Idioma</strong>
@@ -268,60 +262,53 @@
             </span>
           </div>
           <button class="sidebar-theme-toggle mobile-more-theme-toggle mobile-setting-row" type="button" data-mobile-theme-action aria-label="Cambiar a modo claro" data-i18n-aria-label="theme.toLight" aria-pressed="false">
-            <span class="mobile-theme-main">
-              <span class="sidebar-theme-icon" aria-hidden="true">
-                <svg class="theme-icon theme-icon-sun" viewBox="0 0 24 24" focusable="false">
-                  <circle cx="12" cy="12" r="4"></circle>
-                  <path d="M12 2.5v2.2M12 19.3v2.2M4.7 4.7l1.55 1.55M17.75 17.75l1.55 1.55M2.5 12h2.2M19.3 12h2.2M4.7 19.3l1.55-1.55M17.75 6.25l1.55-1.55"></path>
-                </svg>
-                <svg class="theme-icon theme-icon-moon" viewBox="0 0 24 24" focusable="false">
-                  <path d="M20.2 15.15A7.85 7.85 0 0 1 8.85 3.8 8.2 8.2 0 1 0 20.2 15.15Z"></path>
-                </svg>
-              </span>
-              <span class="sidebar-theme-copy">
-                <strong data-i18n="prefs.appearance">Apariencia</strong>
-                <small data-i18n="prefs.themeDesc">Cambiar entre modo oscuro y claro.</small>
-              </span>
+            <span class="mobile-setting-copy">
+              <strong data-i18n="prefs.appearance">Apariencia</strong>
             </span>
-            <span class="mobile-theme-state" data-theme-state>Oscuro</span>
+            <span class="mobile-theme-toggle-control" aria-hidden="true">
+              <span data-theme-choice="light" data-i18n="theme.light">Claro</span>
+              <span data-theme-choice="dark" data-i18n="theme.dark">Oscuro</span>
+            </span>
+            <span class="sr-only" data-theme-state>Oscuro</span>
           </button>
         </section>
       </div>
     </section>
 
-    <section id="system-status" class="system-status-view" hidden>
-      <div class="system-hero">
+    <section id="source-preferences" class="source-preferences-view" hidden>
+      <div class="source-preferences-hero">
         <div>
-          <p class="eyebrow" data-i18n="system.status">Estado del sistema</p>
-          <h3 data-i18n="system.operations">Resumen operativo</h3>
-          <p data-i18n="system.description">Salud de actualización automática, cobertura del corpus y distribución de fuentes.</p>
+          <p class="eyebrow" data-i18n="sources.kicker">Preferencias</p>
+          <h3 data-i18n="sources.title">Fuentes</h3>
+          <p data-i18n="sources.description">Guardá qué fuentes priorizar u ocultar. El filtro actual sigue disponible para ajustes temporales.</p>
         </div>
-        <div id="system-health-badge" class="system-health-badge">Comprobando...</div>
+        <div class="source-preferences-actions">
+          <button type="button" class="source-apply-button" data-source-action="apply">
+            <span class="source-apply-icon" aria-hidden="true">
+              <svg viewBox="0 0 16 16" focusable="false">
+                <path d="M3.2 8.2 6.4 11.2 12.8 4.8"></path>
+              </svg>
+            </span>
+            <span data-source-apply-label data-i18n="sources.apply">Aplicar</span>
+          </button>
+          <button type="button" class="secondary" data-source-action="reset" data-i18n="sources.reset">Restablecer</button>
+        </div>
       </div>
-
-      <section class="panel">
-        <div class="section-title">
-          <p class="eyebrow" data-i18n="system.health">Salud</p>
-          <h3 data-i18n="system.updates">Actualizaciones automáticas</h3>
-        </div>
-        <div id="system-health" class="system-health-grid"></div>
-      </section>
-
-      <section class="panel">
-        <div class="section-title">
-          <p class="eyebrow" data-i18n="system.metrics">Métricas</p>
-          <h3 data-i18n="system.corpus">Resumen del corpus</h3>
-        </div>
-        <div id="system-metrics" class="stats"></div>
-      </section>
-
-      <section class="panel">
-        <div class="section-title">
-          <p class="eyebrow" data-i18n="system.sources">Fuentes</p>
-          <h3 data-i18n="system.sourceBreakdown">Distribución por fuente</h3>
-        </div>
-        <div id="source-breakdown" class="source-breakdown"></div>
-      </section>
+      <div class="source-preference-list">
+      {% for source in sources %}
+        <article class="source-preference-row" data-source-row="{{ source }}">
+          <div class="source-preference-copy">
+            <strong>{{ source }}</strong>
+            <span data-i18n="sources.role.{{ source|replace(' ', '') }}">Señal de fuente</span>
+          </div>
+          <div class="source-preference-toggle" role="group" aria-label="{{ source }}">
+            <button type="button" data-source-preference="{{ source }}" data-source-value="prioritized" aria-pressed="false" data-i18n="sources.prioritized">Prioritaria</button>
+            <button type="button" data-source-preference="{{ source }}" data-source-value="normal" aria-pressed="true" data-i18n="sources.normal">Normal</button>
+            <button type="button" data-source-preference="{{ source }}" data-source-value="hidden" aria-pressed="false" data-i18n="sources.hidden">Oculta</button>
+          </div>
+        </article>
+      {% endfor %}
+      </div>
     </section>
   </main>
 

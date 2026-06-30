@@ -118,6 +118,22 @@ class WebServiceTestCase(unittest.TestCase):
         self.assertEqual([item["id"] for item in result["items"]], ["keep"])
         self.assertEqual(result["count"], 1)
 
+    def test_feed_marks_and_sorts_prioritized_sources_without_mutating_scores(self) -> None:
+        today = datetime.now(web_services.BRIEF_TIMEZONE).date().isoformat()
+        self.add_article("normal", "Normal source story", "Reuters", "ai_agents", 90)
+        self.add_article("priority", "Priority source story", "OpenAI Blog", "ai_agents", 88)
+
+        result = web_services.get_feed(
+            fecha=today,
+            fuentes=["Reuters", "OpenAI Blog"],
+            prioritized_fuentes=["OpenAI Blog"],
+        )
+
+        self.assertEqual([item["id"] for item in result["items"][:2]], ["priority", "normal"])
+        self.assertEqual(result["items"][0]["source_preference"], "prioritized")
+        self.assertEqual(result["items"][0]["selected_score"], 88)
+        self.assertEqual(result["items"][1]["source_preference"], "normal")
+
     def test_feed_all_dates_disables_date_filter(self) -> None:
         today = datetime.now(web_services.BRIEF_TIMEZONE).date()
         yesterday = today - timedelta(days=1)
@@ -540,11 +556,12 @@ class WebApiRouteTests(unittest.TestCase):
         import web_app
 
         with patch.object(web_app.web_services, "get_feed", return_value={"items": [], "count": 0, "hot_topics": []}) as get_feed:
-            response = TestClient(web_app.app).get("/api/feed?lang=en")
+            response = TestClient(web_app.app).get("/api/feed?lang=en&prioritized_fuentes=OpenAI%20Blog")
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["count"], 0)
         self.assertEqual(get_feed.call_args.kwargs["lang"], "en")
+        self.assertEqual(get_feed.call_args.kwargs["prioritized_fuentes"], ["OpenAI Blog"])
 
     def test_summary_route_returns_clear_error_status(self) -> None:
         from fastapi.testclient import TestClient
@@ -718,7 +735,7 @@ class WebUiStaticTests(unittest.TestCase):
         self.assertIn("Favoritos", template)
         self.assertIn("Espacio de trabajo", template)
         self.assertIn("Controles del feed", template)
-        self.assertIn("Estado del sistema", template)
+        self.assertIn("Fuentes", template)
         self.assertIn('data-view-target="today"', template)
         self.assertIn('data-view-target="briefs"', template)
         self.assertIn('data-view-target="favorites"', template)
@@ -846,30 +863,64 @@ class WebUiStaticTests(unittest.TestCase):
         self.assertNotIn("body.view-favorites .feed {", styles)
         self.assertIn("[hidden]", styles)
 
-    def test_system_status_central_panel_is_present(self) -> None:
+    def test_source_preferences_replace_user_facing_system_status(self) -> None:
         template = Path("templates/index.html").read_text(encoding="utf-8")
         script = Path("static/app.js").read_text(encoding="utf-8")
         styles = Path("static/app.css").read_text(encoding="utf-8")
 
-        self.assertIn('id="system-status-button"', template)
-        self.assertIn('data-view-target="system"', template)
+        self.assertNotIn('id="system-status-button"', template)
+        self.assertNotIn('data-view-target="system"', template)
         self.assertNotIn('id="refresh-status"', template)
-        self.assertIn('id="system-status"', template)
-        self.assertIn("Resumen operativo", template)
-        self.assertIn('id="system-health"', template)
-        self.assertIn('id="system-metrics"', template)
-        self.assertIn('id="source-breakdown"', template)
-        self.assertIn('state.view === "system"', script)
-        self.assertIn("loadSystemStatus", script)
-        self.assertIn('fetchJson(withLanguage("/api/stats"))', script)
-        self.assertIn('fetchJson(withLanguage("/api/refresh-status"))', script)
-        self.assertIn("renderSourceBreakdown", script)
-        self.assertIn("view-system", script)
-        system_hide_block = styles.split("body.view-system .today-only,", maxsplit=1)[1].split("{", maxsplit=1)[0]
-        self.assertIn("body.view-system .feed-controls", system_hide_block)
-        self.assertIn(".system-status-view", styles)
-        self.assertIn(".system-health-grid", styles)
-        self.assertIn(".source-breakdown", styles)
+        self.assertNotIn('id="system-status"', template)
+        self.assertNotIn("Resumen operativo", template)
+        self.assertNotIn("Estado del sistema", template)
+        workspace_nav = template.split('class="sidebar-section mode-nav"', maxsplit=1)[1].split("</nav>", maxsplit=1)[0]
+        preferences_section = template.split('class="sidebar-theme-section preferences-section"', maxsplit=1)[1].split("</aside>", maxsplit=1)[0]
+        self.assertNotIn('data-view-target="sources"', workspace_nav)
+        self.assertIn('data-view-target="sources"', preferences_section)
+        self.assertIn("3 modos", workspace_nav)
+        self.assertIn('data-view-target="sources"', template)
+        self.assertIn('id="source-preferences"', template)
+        self.assertIn("Preferencias guardadas para filtros y ranking.", template)
+        self.assertIn('class="source-apply-button"', template)
+        self.assertIn('class="source-apply-icon"', template)
+        self.assertIn('data-source-apply-label', template)
+        self.assertIn(">Aplicar</span>", template)
+        self.assertNotIn("Aplicar a filtros", template)
+        self.assertIn("Restablecer", template)
+        self.assertIn('data-source-preference="{{ source }}"', template)
+        self.assertIn('data-source-value="prioritized"', template)
+        self.assertIn('data-source-value="normal"', template)
+        self.assertIn('data-source-value="hidden"', template)
+        self.assertIn('"nav.sources": "Sources"', script)
+        self.assertIn('"nav.modes": "3 modes"', script)
+        self.assertIn('"sources.apply": "Apply"', script)
+        self.assertIn('"sources.applied": "Applied"', script)
+        self.assertIn('"sources.role.OpenAIBlog": "Official OpenAI and AI updates."', script)
+        self.assertIn('SOURCE_PREFERENCE_STORAGE_KEY = "newser.sourcePreferences"', script)
+        self.assertIn("function defaultSourcePreferences()", script)
+        self.assertIn("function applySourcePreferencesToFilters()", script)
+        self.assertIn("function showSourceApplyFeedback(button)", script)
+        self.assertIn('button.classList.add("is-confirmed")', script)
+        self.assertIn("function resetSourcePreferences()", script)
+        self.assertIn('params.append("prioritized_fuentes", source)', script)
+        self.assertIn('item.source_preference === "prioritized"', script)
+        self.assertNotIn("loadSystemStatus", script)
+        self.assertNotIn('fetchJson(withLanguage("/api/stats"))', script)
+        self.assertNotIn('fetchJson(withLanguage("/api/refresh-status"))', script)
+        self.assertIn("view-sources", script)
+        sources_hide_block = styles.split("body.view-sources .today-only,", maxsplit=1)[1].split("{", maxsplit=1)[0]
+        self.assertIn("body.view-sources .feed-controls", sources_hide_block)
+        self.assertIn(".preference-nav-button", styles)
+        preferences_styles = styles.split(".preferences-section {", maxsplit=1)[1].split("}", maxsplit=1)[0]
+        self.assertIn("background: var(--panel-translucent)", preferences_styles)
+        self.assertIn("border: 1px solid var(--line-strong)", preferences_styles)
+        self.assertIn("display: grid", preferences_styles)
+        self.assertIn("gap: 9px", preferences_styles)
+        self.assertIn(".source-preferences-view", styles)
+        self.assertIn(".source-apply-button.is-confirmed", styles)
+        self.assertIn(".source-preference-toggle", styles)
+        self.assertIn(".source-preference-badge", styles)
 
     def test_hot_topics_render_multi_source_details(self) -> None:
         script = Path("static/app.js").read_text(encoding="utf-8")
@@ -939,20 +990,26 @@ class WebUiStaticTests(unittest.TestCase):
         self.assertIn('class="mobile-tabbar"', template)
         self.assertIn('data-view-target="more"', template)
         self.assertIn('id="mobile-more"', template)
-        mobile_more = template.split('id="mobile-more"', maxsplit=1)[1].split('id="system-status"', maxsplit=1)[0]
+        mobile_more = template.split('id="mobile-more"', maxsplit=1)[1].split('id="source-preferences"', maxsplit=1)[0]
         self.assertNotIn("Feed filters", mobile_more)
         self.assertNotIn("data-mobile-open-drawer", mobile_more)
         self.assertNotIn("mobile-more-hero", mobile_more)
-        self.assertIn("Estado del sistema", mobile_more)
+        self.assertNotIn("Estado del sistema", mobile_more)
+        self.assertNotIn("Contenido", mobile_more)
+        preferences_card = mobile_more.split('data-i18n="prefs.title"', maxsplit=1)[1]
+        self.assertIn('data-view-target="sources"', preferences_card)
+        self.assertIn("Fuentes", mobile_more)
         self.assertIn("Apariencia", mobile_more)
         self.assertNotIn("About", mobile_more)
         self.assertNotIn("IT News Trend Analyzer for AI", mobile_more)
         self.assertIn("mobile-more-theme-toggle", mobile_more)
-        self.assertIn("mobile-theme-main", mobile_more)
-        self.assertIn("mobile-theme-state", mobile_more)
-        self.assertIn("sidebar-theme-icon", mobile_more)
-        self.assertIn("sidebar-theme-copy", mobile_more)
-        self.assertIn("Cambiar entre modo oscuro y claro.", mobile_more)
+        self.assertIn("mobile-theme-toggle-control", mobile_more)
+        self.assertIn('data-theme-choice="light"', mobile_more)
+        self.assertIn('data-theme-choice="dark"', mobile_more)
+        self.assertIn('class="sr-only" data-theme-state', mobile_more)
+        self.assertNotIn("sidebar-theme-icon", mobile_more)
+        self.assertNotIn("sidebar-theme-copy", mobile_more)
+        self.assertNotIn("Cambiar entre modo oscuro y claro.", mobile_more)
         self.assertNotIn("mobile-more-theme-indicator", mobile_more)
         self.assertIn("function initMobileShell()", script)
         self.assertIn("function openMobileDrawer()", script)
@@ -968,9 +1025,10 @@ class WebUiStaticTests(unittest.TestCase):
         self.assertIn(".mobile-tabbar", styles)
         self.assertIn(".mobile-more-view", styles)
         self.assertIn(".mobile-more-theme-toggle", styles)
-        self.assertIn(".mobile-theme-main", styles)
-        self.assertIn(".mobile-theme-state", styles)
-        self.assertIn("body.sidebar-collapsed .mobile-more-theme-toggle .sidebar-theme-copy", styles)
+        self.assertIn(".mobile-theme-toggle-control", styles)
+        self.assertIn('span[data-theme-choice="light"]', styles)
+        self.assertIn('span[data-theme-choice="dark"]', styles)
+        self.assertIn(".sr-only", styles)
         self.assertIn("const themeStateLabels", script)
         self.assertIn("[data-theme-state]", script)
         self.assertIn(".mobile-drawer-backdrop", styles)
@@ -980,8 +1038,6 @@ class WebUiStaticTests(unittest.TestCase):
         self.assertIn("display: none", mobile_styles.split(".mode-nav", maxsplit=1)[1].split("}", maxsplit=1)[0])
         self.assertIn(".sidebar-theme-section", mobile_styles)
         self.assertIn("display: none", mobile_styles.split(".sidebar-theme-section", maxsplit=1)[1].split("}", maxsplit=1)[0])
-        self.assertIn(".system-section", mobile_styles)
-        self.assertIn("body.sidebar-collapsed .system-section", mobile_styles)
         self.assertIn("body.sidebar-collapsed .sidebar-theme-section", mobile_styles)
         self.assertIn("width: min(82vw, 300px)", mobile_styles)
         self.assertIn("max-width: 300px", mobile_styles)

@@ -3,6 +3,7 @@ const state = {
   loading: false,
   view: "today",
   language: window.localStorage.getItem("newser.language") === "en" ? "en" : "es",
+  sourcePreferences: {},
 };
 
 const I18N = {
@@ -20,7 +21,8 @@ const I18N = {
     "nav.briefsDesc": "Resumen ejecutivo de hoy y últimos 7 días.",
     "nav.favorites": "Favoritos",
     "nav.favoritesDesc": "Artículos y repositorios guardados.",
-    "nav.system": "Estado del sistema",
+    "nav.sources": "Fuentes",
+    "nav.sourcesDesc": "Preferencias para filtros y ranking.",
     "nav.more": "Más",
     "filters.title": "Controles del feed",
     "filters.date": "Fecha",
@@ -57,7 +59,9 @@ const I18N = {
     "status.loadingDashboard": "Cargando panel...",
     "status.loadingBriefs": "Cargando briefs diarios...",
     "status.loadingFavorites": "Cargando favoritos...",
-    "status.loadingSystem": "Cargando estado del sistema...",
+    "status.loadingSources": "Cargando preferencias de fuentes...",
+    "status.sourcesApplied": "Preferencias aplicadas a los filtros.",
+    "status.sourcesReset": "Preferencias de fuentes restablecidas.",
     "status.generatingSummary": "Generando resumen...",
     "status.summaryCached": "El resumen ya existe.",
     "status.summaryGenerated": "Resumen generado.",
@@ -141,6 +145,22 @@ const I18N = {
     "system.unavailable": "No disponible",
     "system.loadError": "No se pudo cargar el estado del sistema:",
     "source.fallback": "Fuente",
+    "sources.kicker": "Preferencias",
+    "sources.title": "Fuentes",
+    "sources.description": "Guardá qué fuentes priorizar u ocultar. El filtro actual sigue disponible para ajustes temporales.",
+    "sources.mobileDesc": "Preferencias guardadas para filtros y ranking.",
+    "sources.apply": "Aplicar",
+    "sources.applied": "Aplicado",
+    "sources.reset": "Restablecer",
+    "sources.prioritized": "Prioritaria",
+    "sources.normal": "Normal",
+    "sources.hidden": "Oculta",
+    "sources.badgePrioritized": "Prioritaria",
+    "sources.role.GitHubTrending": "Repositorios y proyectos open source en tendencia.",
+    "sources.role.HackerNews": "Discusión técnica y señales tempranas de comunidad.",
+    "sources.role.Reuters": "Cobertura amplia de noticias tecnológicas.",
+    "sources.role.GitHubBlog": "Actualizaciones oficiales de la plataforma GitHub.",
+    "sources.role.OpenAIBlog": "Actualizaciones oficiales de OpenAI e IA.",
     "stats.corpus": "Corpus",
     "stats.last24h": "Últimas 24h",
     "stats.aiCoverage": "Cobertura IA",
@@ -167,7 +187,8 @@ const I18N = {
     "nav.briefsDesc": "Today's executive summary and previous 7 days.",
     "nav.favorites": "Favorites",
     "nav.favoritesDesc": "Saved articles and repositories.",
-    "nav.system": "System Status",
+    "nav.sources": "Sources",
+    "nav.sourcesDesc": "Preferences for filters and ranking.",
     "nav.more": "More",
     "filters.title": "Feed controls",
     "filters.date": "Date",
@@ -204,7 +225,9 @@ const I18N = {
     "status.loadingDashboard": "Loading dashboard...",
     "status.loadingBriefs": "Loading daily briefs...",
     "status.loadingFavorites": "Loading favorites...",
-    "status.loadingSystem": "Loading system status...",
+    "status.loadingSources": "Loading source preferences...",
+    "status.sourcesApplied": "Source preferences applied to filters.",
+    "status.sourcesReset": "Source preferences reset.",
     "status.generatingSummary": "Generating summary...",
     "status.summaryCached": "Summary already exists.",
     "status.summaryGenerated": "Summary generated.",
@@ -288,6 +311,22 @@ const I18N = {
     "system.unavailable": "Unavailable",
     "system.loadError": "System status could not be loaded:",
     "source.fallback": "Source",
+    "sources.kicker": "Preferences",
+    "sources.title": "Sources",
+    "sources.description": "Save which sources to prioritize or hide. The current filter remains available for temporary changes.",
+    "sources.mobileDesc": "Saved preferences for filters and ranking.",
+    "sources.apply": "Apply",
+    "sources.applied": "Applied",
+    "sources.reset": "Reset sources",
+    "sources.prioritized": "Prioritized",
+    "sources.normal": "Normal",
+    "sources.hidden": "Hidden",
+    "sources.badgePrioritized": "Prioritized",
+    "sources.role.GitHubTrending": "Trending open-source repositories and projects.",
+    "sources.role.HackerNews": "Technical discussion and early community signals.",
+    "sources.role.Reuters": "Broad technology news coverage.",
+    "sources.role.GitHubBlog": "Official GitHub platform updates.",
+    "sources.role.OpenAIBlog": "Official OpenAI and AI updates.",
     "stats.corpus": "Corpus",
     "stats.last24h": "Last 24h",
     "stats.aiCoverage": "AI coverage",
@@ -333,14 +372,14 @@ const dailyBriefs = document.querySelector("#daily-briefs");
 const dailyBriefsList = document.querySelector("#daily-briefs-list");
 const favorites = document.querySelector("#favorites");
 const favoritesFeed = document.querySelector("#favorites-feed");
-const systemStatus = document.querySelector("#system-status");
-const systemHealthBadge = document.querySelector("#system-health-badge");
-const systemHealth = document.querySelector("#system-health");
-const systemMetrics = document.querySelector("#system-metrics");
-const sourceBreakdown = document.querySelector("#source-breakdown");
+const sourcePreferencesPanel = document.querySelector("#source-preferences");
+const sourcePreferenceButtons = document.querySelectorAll("[data-source-preference]");
+const sourceActionButtons = document.querySelectorAll("[data-source-action]");
 const mediaModal = document.querySelector("#media-modal");
 const mediaModalImage = document.querySelector("#media-modal-image");
 const mediaModalClose = document.querySelector("#media-modal-close");
+const SOURCE_PREFERENCE_STORAGE_KEY = "newser.sourcePreferences";
+const SOURCE_PREFERENCE_VALUES = new Set(["prioritized", "normal", "hidden"]);
 
 function i18n(key) {
   return I18N[state.language]?.[key] || I18N.es[key] || key;
@@ -396,6 +435,110 @@ function setStatus(message, isError = false) {
   statusLine.classList.toggle("error", isError);
 }
 
+function sourceInputs() {
+  return Array.from(filters.querySelectorAll('input[name="fuentes"]'));
+}
+
+function sourceNames() {
+  return sourceInputs().map((input) => input.value).filter(Boolean);
+}
+
+function defaultSourcePreferences() {
+  return Object.fromEntries(sourceNames().map((source) => [source, "normal"]));
+}
+
+function loadSourcePreferences() {
+  const defaults = defaultSourcePreferences();
+  try {
+    const saved = JSON.parse(window.localStorage.getItem(SOURCE_PREFERENCE_STORAGE_KEY) || "{}");
+    Object.keys(defaults).forEach((source) => {
+      if (SOURCE_PREFERENCE_VALUES.has(saved[source])) {
+        defaults[source] = saved[source];
+      }
+    });
+  } catch {
+    // Keep defaults when localStorage contains invalid JSON.
+  }
+  return defaults;
+}
+
+function saveSourcePreferences() {
+  window.localStorage.setItem(SOURCE_PREFERENCE_STORAGE_KEY, JSON.stringify(state.sourcePreferences));
+}
+
+function renderSourcePreferenceControls() {
+  sourcePreferenceButtons.forEach((button) => {
+    const value = state.sourcePreferences[button.dataset.sourcePreference] || "normal";
+    button.setAttribute("aria-pressed", String(button.dataset.sourceValue === value));
+  });
+}
+
+function sourceFilterRoot() {
+  return sourceInputs()[0]?.closest("[data-multiselect]") || null;
+}
+
+function applySourcePreferencesToFilters() {
+  sourceInputs().forEach((input) => {
+    input.checked = state.sourcePreferences[input.value] !== "hidden";
+  });
+  const root = sourceFilterRoot();
+  if (root) syncSelectAll(root);
+}
+
+function resetSourcePreferences() {
+  state.sourcePreferences = defaultSourcePreferences();
+  saveSourcePreferences();
+  renderSourcePreferenceControls();
+  applySourcePreferencesToFilters();
+}
+
+function showSourceApplyFeedback(button) {
+  const label = button.querySelector("[data-source-apply-label]");
+  window.clearTimeout(button._sourceApplyTimer);
+  button.classList.add("is-confirmed");
+  button.setAttribute("aria-label", i18n("sources.applied"));
+  if (label) label.textContent = i18n("sources.applied");
+  button._sourceApplyTimer = window.setTimeout(() => {
+    button.classList.remove("is-confirmed");
+    button.setAttribute("aria-label", i18n("sources.apply"));
+    if (label) label.textContent = i18n("sources.apply");
+  }, 1200);
+}
+
+function checkedPrioritizedSources() {
+  return sourceInputs()
+    .filter((input) => input.checked && state.sourcePreferences[input.value] === "prioritized")
+    .map((input) => input.value);
+}
+
+function initSourcePreferences() {
+  state.sourcePreferences = loadSourcePreferences();
+  renderSourcePreferenceControls();
+  applySourcePreferencesToFilters();
+  sourcePreferenceButtons.forEach((button) => {
+    button.addEventListener("click", () => {
+      const source = button.dataset.sourcePreference || "";
+      const value = button.dataset.sourceValue || "normal";
+      if (!source || !SOURCE_PREFERENCE_VALUES.has(value)) return;
+      state.sourcePreferences[source] = value;
+      saveSourcePreferences();
+      renderSourcePreferenceControls();
+    });
+  });
+  sourceActionButtons.forEach((button) => {
+    button.addEventListener("click", () => {
+      if (button.dataset.sourceAction === "reset") {
+        resetSourcePreferences();
+        setStatus(i18n("status.sourcesReset"));
+      } else {
+        applySourcePreferencesToFilters();
+        setStatus(i18n("status.sourcesApplied"));
+        showSourceApplyFeedback(button);
+      }
+    });
+  });
+}
+
 function formParams() {
   const data = new FormData(filters);
   const params = new URLSearchParams();
@@ -409,6 +552,7 @@ function formParams() {
   params.set("orden", orden);
   params.set("lang", state.language);
   for (const source of data.getAll("fuentes")) params.append("fuentes", source);
+  for (const source of checkedPrioritizedSources()) params.append("prioritized_fuentes", source);
   for (const area of data.getAll("areas")) params.append("areas", area);
   if (state.query) params.set("q", state.query);
   return params;
@@ -475,14 +619,14 @@ function formatFeedDate(value) {
 function updateTopbarTitle() {
   const briefsActive = state.view === "briefs";
   const favoritesActive = state.view === "favorites";
-  const systemActive = state.view === "system";
+  const sourcesActive = state.view === "sources";
   const moreActive = state.view === "more";
   const title = briefsActive
     ? i18n("nav.briefs")
     : favoritesActive
       ? i18n("nav.favorites")
-      : systemActive
-        ? i18n("nav.system")
+      : sourcesActive
+        ? i18n("nav.sources")
         : moreActive
           ? i18n("nav.more")
           : i18n("nav.today");
@@ -541,8 +685,9 @@ async function loadAll() {
     await loadFavorites();
     return;
   }
-  if (state.view === "system") {
-    await loadSystemStatus();
+  if (state.view === "sources") {
+    setViewMode("sources");
+    setStatus("");
     return;
   }
   if (state.view === "more") {
@@ -613,42 +758,20 @@ async function loadFavorites() {
   }
 }
 
-async function loadSystemStatus() {
-  if (state.loading) return;
-  state.loading = true;
-  document.body.classList.add("is-loading");
-  setViewMode("system");
-  setStatus(i18n("status.loadingSystem"));
-  try {
-    const [statsData, refreshData] = await Promise.all([
-      fetchJson(withLanguage("/api/stats")),
-      fetchJson(withLanguage("/api/refresh-status")),
-    ]);
-    renderSystemStatus(statsData, refreshData);
-    setStatus("");
-  } catch (error) {
-    renderSystemError(error.message);
-    setStatus(error.message, true);
-  } finally {
-    state.loading = false;
-    document.body.classList.remove("is-loading");
-  }
-}
-
 function setViewMode(view) {
   state.view = view;
   const briefsActive = view === "briefs";
   const favoritesActive = view === "favorites";
-  const systemActive = view === "system";
+  const sourcesActive = view === "sources";
   const moreActive = view === "more";
   const todayActive = view === "today";
   document.body.classList.toggle("view-briefs", briefsActive);
   document.body.classList.toggle("view-favorites", favoritesActive);
-  document.body.classList.toggle("view-system", systemActive);
+  document.body.classList.toggle("view-sources", sourcesActive);
   document.body.classList.toggle("view-more", moreActive);
   dailyBriefs.hidden = !briefsActive;
   favorites.hidden = !favoritesActive;
-  systemStatus.hidden = !systemActive;
+  if (sourcePreferencesPanel) sourcePreferencesPanel.hidden = !sourcesActive;
   if (mobileMore) mobileMore.hidden = !moreActive;
   if (mobileMenuToggle) mobileMenuToggle.hidden = !todayActive;
   updateTopbarTitle();
@@ -759,80 +882,6 @@ function initSidebar() {
     setSidebarCollapsed(collapsed);
     window.localStorage.setItem(storageKey, String(collapsed));
   });
-}
-
-function renderStats(data) {
-  return [
-    [i18n("stats.corpus"), data.total_corpus],
-    [i18n("stats.last24h"), data.noticias_24h],
-    [i18n("stats.aiCoverage"), `${data.ai_coverage_pct}%`],
-    [i18n("stats.globalItems"), data.global_news_count],
-  ]
-    .map(([label, value]) => `<div class="stat"><strong>${escapeHtml(value)}</strong><span>${escapeHtml(label)}</span></div>`)
-    .join("");
-}
-
-function renderSystemStatus(statsData, refreshData) {
-  const statusLabel = refreshData.updating
-    ? i18n("system.updating")
-    : refreshData.last_error
-      ? i18n("system.needsAttention")
-      : refreshData.stale
-        ? i18n("system.stale")
-        : i18n("system.healthy");
-  systemHealthBadge.textContent = statusLabel;
-  systemHealthBadge.classList.toggle("is-warning", Boolean(refreshData.stale || refreshData.last_error));
-  systemHealthBadge.classList.toggle("is-updating", Boolean(refreshData.updating));
-
-  systemHealth.innerHTML = [
-    [i18n("system.updateState"), refreshData.updating ? i18n("system.updatingSources") : i18n("system.idle")],
-    [i18n("system.freshness"), refreshData.stale ? i18n("system.stale") : i18n("system.fresh")],
-    [i18n("system.lastUpdate"), formatDate(refreshData.latest_ingested_at) || i18n("system.noUpdate")],
-    [i18n("system.nextCheck"), formatDate(refreshData.next_check_at) || i18n("system.notScheduled")],
-    [i18n("system.interval"), `${escapeHtml(refreshData.interval_minutes || 0)} ${i18n("system.minutes")}`],
-    [i18n("system.lastError"), refreshData.last_error || i18n("system.none")],
-  ]
-    .map(([label, value]) => `
-      <article class="system-health-item">
-        <span>${escapeHtml(label)}</span>
-        <strong>${escapeHtml(value)}</strong>
-      </article>
-    `)
-    .join("");
-
-  systemMetrics.innerHTML = renderStats(statsData);
-  renderSourceBreakdown(statsData.source_counts || {});
-}
-
-function renderSourceBreakdown(sourceCounts) {
-  const entries = Object.entries(sourceCounts).sort((a, b) => Number(b[1]) - Number(a[1]));
-  if (!entries.length) {
-    sourceBreakdown.innerHTML = `<div class="empty">${i18n("system.noSources")}</div>`;
-    return;
-  }
-  const max = Math.max(...entries.map(([, count]) => Number(count) || 0), 1);
-  sourceBreakdown.innerHTML = entries
-    .map(([source, count]) => {
-      const pct = Math.max(3, Math.round((Number(count) || 0) / max * 100));
-      return `
-        <article class="source-row">
-          <div>
-            <strong>${escapeHtml(source)}</strong>
-            <span>${escapeHtml(count)} ${i18n("system.items")}</span>
-          </div>
-          <div class="source-bar" aria-hidden="true"><span style="width: ${pct}%"></span></div>
-        </article>
-      `;
-    })
-    .join("");
-}
-
-function renderSystemError(message) {
-  systemHealthBadge.textContent = i18n("system.unavailable");
-  systemHealthBadge.classList.add("is-warning");
-  systemHealth.innerHTML = `<div class="empty">${i18n("system.loadError")} ${escapeHtml(message)}</div>`;
-  systemMetrics.innerHTML = "";
-  sourceBreakdown.innerHTML = "";
 }
 
 function renderBrief(data) {
@@ -1099,6 +1148,9 @@ function renderArticle(item) {
   const discussion = item.discussion_url
     ? `<a href="${escapeHtml(item.discussion_url)}" target="_blank" rel="noreferrer">${escapeHtml(item.comments)} ${i18n("article.comments")}</a>`
     : "";
+  const sourcePreferenceBadge = item.source_preference === "prioritized"
+    ? `<span class="badge source-preference-badge">${i18n("sources.badgePrioritized")}</span>`
+    : "";
   const summaryAction = hasSummary(item) || isRepository
     ? ""
     : `
@@ -1133,7 +1185,7 @@ function renderArticle(item) {
       <div class="article-top">
         <div class="article-meta-stack">
           <div class="article-meta">${escapeHtml(item.fuente)}${time ? ` - ${escapeHtml(time)}` : ""}</div>
-          <div class="badge-row"><span class="badge">${escapeHtml(item.area_label)}</span></div>
+          <div class="badge-row"><span class="badge">${escapeHtml(item.area_label)}</span>${sourcePreferenceBadge}</div>
         </div>
         <div class="article-controls">
           <div class="score">${Number(item.selected_score || 0).toFixed(0)}</div>
@@ -1379,10 +1431,14 @@ navButtons.forEach((button) => {
       loadDailyBriefs();
     } else if (target === "favorites") {
       loadFavorites();
+    } else if (target === "sources") {
+      setViewMode("sources");
+      setStatus("");
     } else if (target === "more") {
       setViewMode("more");
     } else {
-      loadSystemStatus();
+      setViewMode("today");
+      loadAll();
     }
   });
 });
@@ -1430,6 +1486,7 @@ initTheme();
 initSidebar();
 initMobileShell();
 initMultiSelects();
+initSourcePreferences();
 initLanguage();
 syncDateMode();
 loadAll();
