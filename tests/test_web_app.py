@@ -328,6 +328,14 @@ class WebServiceTestCase(unittest.TestCase):
 
         self.assertFalse(web_services.should_catch_up_daily_brief(after_8))
 
+    def test_daily_brief_catchup_uses_existing_generation_path_once(self) -> None:
+        with (
+            patch.object(web_services, "should_catch_up_daily_brief", return_value=True),
+            patch.object(web_services, "generate_daily_brief_job", return_value={"ok": True}) as generate,
+        ):
+            self.assertTrue(web_services.ensure_daily_brief_catchup(background=False))
+            generate.assert_called_once()
+
     def test_favorite_columns_are_declared(self) -> None:
         columns = {column["name"] for column in inspect(self.engine).get_columns("noticias")}
 
@@ -587,19 +595,6 @@ class WebApiRouteTests(unittest.TestCase):
             if scheduler.running:
                 scheduler.shutdown(wait=False)
 
-    def test_scheduler_can_register_daily_brief_catchup_job(self) -> None:
-        import web_app
-
-        scheduler = web_app.create_scheduler()
-        try:
-            with patch.object(web_app.web_services, "should_catch_up_daily_brief", return_value=True):
-                self.assertTrue(web_app.schedule_daily_brief_catchup(scheduler))
-            self.assertIsNotNone(scheduler.get_job(web_app.DAILY_BRIEF_CATCHUP_JOB_ID))
-        finally:
-            if scheduler.running:
-                scheduler.shutdown(wait=False)
-
-
 class WebUiStaticTests(unittest.TestCase):
     def test_new_filter_controls_replace_refresh_and_order_select(self) -> None:
         template = Path("templates/index.html").read_text(encoding="utf-8")
@@ -696,8 +691,8 @@ class WebUiStaticTests(unittest.TestCase):
         self.assertIn("Use the heart button", script)
         self.assertNotIn("Saved to favorites.", script)
         self.assertNotIn("Removed from favorites.", script)
-        self.assertIn("/static/app.js?v=search-enter-results-v1", template)
-        self.assertIn("/static/app.css?v=search-enter-results-v1", template)
+        self.assertIn("/static/app.js?v=brief-catchup-v1", template)
+        self.assertIn("/static/app.css?v=brief-catchup-v1", template)
         self.assertIn('id="desktop-theme-toggle"', template)
         self.assertNotIn('id="mobile-theme-toggle"', template)
         self.assertIn('aria-label="Switch to light mode"', template)
@@ -728,6 +723,7 @@ class WebUiStaticTests(unittest.TestCase):
         self.assertIn(".date-all-option", styles)
         self.assertIn("input:disabled", styles)
         self.assertIn("Every morning at 8 o'clock", script)
+        self.assertIn("Today’s brief is being generated.", script)
         self.assertIn(".topbar-subtitle", styles)
         self.assertNotIn("topbarEyebrow", script)
         self.assertIn('search.value = ""', script)

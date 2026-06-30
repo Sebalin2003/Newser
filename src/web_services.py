@@ -48,6 +48,12 @@ _refresh_state: dict[str, Any] = {
     "last_finished_at": None,
     "last_error": None,
 }
+_daily_brief_lock = threading.Lock()
+_daily_brief_state: dict[str, Any] = {
+    "last_started_at": None,
+    "last_finished_at": None,
+    "last_error": None,
+}
 
 SOURCES = [
     "GitHub Trending",
@@ -374,7 +380,17 @@ def get_brief(fecha: str | None = None) -> dict[str, Any]:
     with get_session() as session:
         brief = session.query(MacroResumen).filter(MacroResumen.fecha == selected_date).first()
         if not brief:
-            return {"available": False, "fecha": selected_date.isoformat()}
+            current_date = datetime.now(BRIEF_TIMEZONE).date()
+            catchup_started = False
+            if selected_date == current_date:
+                catchup_started = ensure_daily_brief_catchup(background=True)
+            return {
+                "available": False,
+                "fecha": selected_date.isoformat(),
+                "catchup_started": catchup_started,
+                "catchup_running": _daily_brief_lock.locked(),
+                "catchup_error": _daily_brief_state.get("last_error"),
+            }
         return {"available": True, **_serialize_brief(brief)}
 
 
@@ -393,6 +409,30 @@ def should_catch_up_daily_brief(now: datetime | None = None) -> bool:
     if current.hour < DAILY_BRIEF_HOUR:
         return False
     return not daily_brief_exists(current.date())
+
+
+def _run_daily_brief_catchup() -> None:
+    _daily_brief_state["last_started_at"] = datetime.now(timezone.utc)
+    _daily_brief_state["last_error"] = None
+    try:
+        generate_daily_brief_job()
+    except Exception as exc:
+        _daily_brief_state["last_error"] = str(exc)
+    finally:
+        _daily_brief_state["last_finished_at"] = datetime.now(timezone.utc)
+        _daily_brief_lock.release()
+
+
+def ensure_daily_brief_catchup(background: bool = True) -> bool:
+    if not should_catch_up_daily_brief():
+        return False
+    if not _daily_brief_lock.acquire(blocking=False):
+        return False
+    if background:
+        threading.Thread(target=_run_daily_brief_catchup, daemon=True).start()
+    else:
+        _run_daily_brief_catchup()
+    return True
 
 
 def _serialize_brief(brief: MacroResumen) -> dict[str, Any]:

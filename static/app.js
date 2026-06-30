@@ -481,8 +481,11 @@ function renderSystemError(message) {
 
 function renderBrief(data) {
   if (!data.available) {
+    const missingMessage = data.catchup_started || data.catchup_running
+      ? "Today’s brief is being generated. Refresh this section in a moment."
+      : "No daily brief is available for this date yet.";
     brief.innerHTML = renderCurrentBriefShell(
-      `<div class="empty">No daily brief is available for this date yet.</div>`,
+      `<div class="empty">${escapeHtml(missingMessage)}</div>`,
       "",
     );
     bindCurrentBriefToggle();
