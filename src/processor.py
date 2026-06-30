@@ -486,6 +486,14 @@ _PROMPT_RESUMEN = (
     "Titular: {titulo}\n\nRespuesta JSON:"
 )
 
+_PROMPT_RESUMEN_EN = (
+    "You are a technology news analyst. "
+    "Summarize the following headline in English for a technical reader. "
+    "Explain what happened and why it matters, without inventing facts. "
+    "Return only valid JSON with the key 'resumen' (maximum 3 sentences).\n\n"
+    "Headline: {titulo}\n\nJSON response:"
+)
+
 _PROMPT_MACRO = (
     "Sos un analista senior de tecnología. "
     "Analizá los siguientes eventos informativos del día y redictá un briefing ejecutivo "
@@ -494,6 +502,15 @@ _PROMPT_MACRO = (
     "Usa lenguaje de negocios claro y directo. No uses viñetas ni numeración.\n\n"
     "Eventos destacados del día ({fecha}):\n{eventos}\n\nBriefing ejecutivo:"
 )
+
+
+def normalize_language(language: str | None = None) -> str:
+    return "en" if str(language or "").strip().lower().startswith("en") else "es"
+
+
+def build_article_summary_prompt(titulo: str, language: str | None = None) -> str:
+    template = _PROMPT_RESUMEN_EN if normalize_language(language) == "en" else _PROMPT_RESUMEN
+    return template.format(titulo=titulo)
 
 
 def _verificar_gemini() -> bool:
@@ -677,11 +694,14 @@ def _payload_signature(payload: dict[str, Any]) -> str:
     return hashlib.sha256("\n".join(sorted(keys)).encode("utf-8")).hexdigest()
 
 
-def _macro_cache_matches(existing: MacroResumen, signature: str) -> bool:
-    if getattr(existing, "modelo", None) != GEMINI_MODEL or not getattr(existing, "brief_json", None):
+def _macro_cache_matches(existing: MacroResumen, signature: str, language: str | None = None) -> bool:
+    lang = normalize_language(language)
+    model = getattr(existing, "modelo_en", None) if lang == "en" else getattr(existing, "modelo", None)
+    brief_json = getattr(existing, "brief_json_en", None) if lang == "en" else getattr(existing, "brief_json", None)
+    if model != GEMINI_MODEL or not brief_json:
         return False
     try:
-        brief = json.loads(existing.brief_json)
+        brief = json.loads(brief_json)
     except (TypeError, json.JSONDecodeError):
         return False
     return (
@@ -794,7 +814,8 @@ def _parsear_brief_json(raw: str, source_records: list[dict[str, str]]) -> dict[
     }
 
 
-def _brief_json_to_text(brief: dict[str, Any]) -> str:
+def _brief_json_to_text(brief: dict[str, Any], language: str | None = None) -> str:
+    lang = normalize_language(language)
     lines = []
     intro = str(brief.get("intro") or "").strip()
     if intro:
@@ -808,58 +829,102 @@ def _brief_json_to_text(brief: dict[str, Any]) -> str:
         if summary:
             lines.append(summary)
         if why:
-            lines.append(f"Por que importa: {why}")
+            label = "Why it matters" if lang == "en" else "Por que importa"
+            lines.append(f"{label}: {why}")
     trend = str(brief.get("trend_reading") or "").strip()
     if trend:
-        lines.append(f"Lectura de tendencias: {trend}")
-    return "\n\n".join(lines).strip() or "Resumen no disponible"
+        label = "Trend reading" if lang == "en" else "Lectura de tendencias"
+        lines.append(f"{label}: {trend}")
+    fallback = "Summary unavailable" if lang == "en" else "Resumen no disponible"
+    return "\n\n".join(lines).strip() or fallback
 
 
 def _persistir_macro_resumen(
-    fecha, texto: str, n_noticias: int, n_clusters: int, modelo: str, brief_json: str | None = None
+    fecha,
+    texto: str,
+    n_noticias: int,
+    n_clusters: int,
+    modelo: str,
+    brief_json: str | None = None,
+    language: str | None = None,
 ) -> None:
     """Upsert del MacroResumen del día en DB."""
+    lang = normalize_language(language)
     with get_session() as session:
         existente = session.query(MacroResumen).filter(MacroResumen.fecha == fecha).first()
         if existente:
-            existente.texto = texto
             existente.n_noticias = n_noticias
             existente.n_clusters = n_clusters
-            existente.modelo = modelo
-            existente.brief_json = brief_json
-            existente.fecha_generacion = datetime.now()  # timestamp local para display
+            if lang == "en":
+                existente.texto_en = texto
+                existente.modelo_en = modelo
+                existente.brief_json_en = brief_json
+                existente.fecha_generacion_en = datetime.now()  # timestamp local para display
+            else:
+                existente.texto = texto
+                existente.modelo = modelo
+                existente.brief_json = brief_json
+                existente.fecha_generacion = datetime.now()  # timestamp local para display
         else:
+            data = {
+                "fecha": fecha,
+                "texto": texto if lang == "es" else "Resumen no disponible",
+                "n_noticias": n_noticias,
+                "n_clusters": n_clusters,
+                "modelo": modelo if lang == "es" else None,
+                "brief_json": brief_json if lang == "es" else None,
+                "fecha_generacion": datetime.now(),
+            }
+            if lang == "en":
+                data.update({
+                    "texto_en": texto,
+                    "modelo_en": modelo,
+                    "brief_json_en": brief_json,
+                    "fecha_generacion_en": datetime.now(),
+                })
             session.add(MacroResumen(
-                fecha=fecha,
-                texto=texto,
-                n_noticias=n_noticias,
-                n_clusters=n_clusters,
-                modelo=modelo,
-                brief_json=brief_json,
-                fecha_generacion=datetime.now(),  # timestamp local para display
+                **data,
             ))
 
 
-def generar_macro_resumen_dia(config: dict, progress_callback: Callable[[str], None] = None) -> dict[str, Any]:
+def generar_macro_resumen_dia(
+    config: dict,
+    progress_callback: Callable[[str], None] = None,
+    language: str | None = None,
+) -> dict[str, Any]:
     """Genera el MacroResumen del día leyendo noticias directamente (sin clusters)."""
+    lang = normalize_language(language)
     if progress_callback:
         progress_callback("Evaluando generación de MacroResumen del día...")
 
     hoy = datetime.now().date()
-    FALLBACK_BAJO_VOLUMEN = "Bajo volumen de actualizaciones en el mercado hoy."
+    FALLBACK_BAJO_VOLUMEN = (
+        "Low update volume in the market today."
+        if lang == "en"
+        else "Bajo volumen de actualizaciones en el mercado hoy."
+    )
 
     # Idempotencia
     with get_session() as session:
         existente = session.query(MacroResumen).filter(MacroResumen.fecha == hoy).first()
         existing_ready = None
         if existente:
-            if existente.modelo in {"fallback", "gemini_error"}:
+            existing_model = existente.modelo_en if lang == "en" else existente.modelo
+            existing_text = existente.texto_en if lang == "en" else existente.texto
+            if existing_model in {"fallback", "gemini_error"}:
                 logger.info("MacroResumen para %s es %s. Se regenerará.", hoy, existente.modelo)
-                session.delete(existente)
-                session.commit()
+                if lang == "es":
+                    session.delete(existente)
+                    session.commit()
+                else:
+                    existente.texto_en = None
+                    existente.brief_json_en = None
+                    existente.modelo_en = None
+                    existente.fecha_generacion_en = None
             else:
                 logger.info("MacroResumen para %s ya existe. Se omite generación.", hoy)
-                existing_ready = existente
+                if existing_text:
+                    existing_ready = existente
 
         # Leer noticias directamente — NO clusters
         cutoff = datetime.combine(hoy, datetime.min.time())
@@ -888,6 +953,7 @@ def generar_macro_resumen_dia(config: dict, progress_callback: Callable[[str], N
                 n_noticias=n_noticias_hoy,
                 n_clusters=0,
                 modelo="fallback",
+                language=lang,
             )
             return {"macro_resumen_generado": True, "texto": FALLBACK_BAJO_VOLUMEN, "uso_api": False}
 
@@ -908,12 +974,43 @@ def generar_macro_resumen_dia(config: dict, progress_callback: Callable[[str], N
 
         payload = build_hybrid_brief_payload(global_items, local_signals, hoy)
         source_signature = _payload_signature(payload)
-        if existing_ready and _macro_cache_matches(existing_ready, source_signature):
+        if existing_ready and _macro_cache_matches(existing_ready, source_signature, lang):
             logger.info("MacroResumen para %s ya existe con la misma seleccion. Se omite Gemini.", hoy)
-            return {"macro_resumen_generado": False, "texto": existing_ready.texto, "uso_api": False}
+            existing_text = existing_ready.texto_en if lang == "en" else existing_ready.texto
+            return {"macro_resumen_generado": False, "texto": existing_text, "uso_api": False}
         payload_json = json.dumps(payload, ensure_ascii=False, indent=2)
 
-        prompt = f"""Sos un editor senior de noticias IT.
+        if lang == "en":
+            prompt = f"""You are a senior IT news editor.
+Write an executive brief in English for {payload["date"]}.
+Use only the provided JSON evidence. Do not invent facts or URLs.
+
+EVIDENCE:
+{payload_json}
+
+Return only valid JSON with this shape:
+{{
+  "intro": "short paragraph about the day's central theme",
+  "items": [
+    {{
+      "title": "clear title",
+      "summary": "2 or 3 sentences in English",
+      "why_it_matters": "1 sentence about impact",
+      "category": "AI | Cybersecurity | Developer Tools | Infrastructure | Regulation | IT",
+      "sources": [{{"name": "Reuters", "url": "exact URL included in source_records"}}]
+    }}
+  ],
+  "trend_reading": "3 executive conclusions in one paragraph"
+}}
+
+Rules:
+- Include 5 to 8 items if there is enough evidence.
+- At least 3 items must come from global_news when available.
+- Sources can only use URLs present in source_records.
+- Use natural English and an executive tone.
+- Do not use markdown inside the JSON."""
+        else:
+            prompt = f"""Sos un editor senior de noticias IT.
 Escribi un brief ejecutivo en espanol para la fecha {payload["date"]}.
 Usa exclusivamente la evidencia JSON provista. No inventes hechos ni URLs.
 
@@ -954,7 +1051,7 @@ Reglas:
         if brief_data:
             brief_data["source_signature"] = source_signature
             brief_data["score_version"] = SCORE_VERSION
-            texto = _brief_json_to_text(brief_data)
+            texto = _brief_json_to_text(brief_data, lang)
             brief_json = json.dumps(brief_data, ensure_ascii=False)
             modelo_usado = _gemini_model_usado()
             logger.info(
@@ -967,7 +1064,11 @@ Reglas:
             modelo_usado = _gemini_model_usado()
             logger.info("MacroResumen generado con Gemini (%d noticias).", n_noticias_hoy)
         else:
-            texto = LAST_GEMINI_ERROR or "Gemini no pudo generar el brief del dia. Revisa cuota, clave o modelo configurado."
+            texto = LAST_GEMINI_ERROR or (
+                "Gemini could not generate the daily brief. Check quota, key, or configured model."
+                if lang == "en"
+                else "Gemini no pudo generar el brief del dia. Revisa cuota, clave o modelo configurado."
+            )
             modelo_usado = "gemini_error"
             logger.warning("Gemini no disponible. Se guarda estado de error del brief: %s", texto)
 
@@ -978,6 +1079,7 @@ Reglas:
             n_clusters=0,
             modelo=modelo_usado,
             brief_json=brief_json,
+            language=lang,
         )
         return {"macro_resumen_generado": True, "texto": texto, "uso_api": modelo_usado != "gemini_error"}
 
@@ -1032,9 +1134,14 @@ Responde SOLO con el resumen, sin títulos ni bullet points."""
 # Enriquecimiento Individual con Gemini
 # ===========================================================================
 
-def _generar_resumen_gemini(titulo: str, progress_callback: Callable[[str], None] = None, interactive: bool = False) -> str:
+def _generar_resumen_gemini(
+    titulo: str,
+    progress_callback: Callable[[str], None] = None,
+    interactive: bool = False,
+    language: str | None = None,
+) -> str:
     """Genera resumen via Gemini. Retorna raw JSON string."""
-    prompt = _PROMPT_RESUMEN.format(titulo=titulo)
+    prompt = build_article_summary_prompt(titulo, language)
     resultado = _llamar_gemini(prompt, progress_callback, interactive)
     return resultado or "Resumen no disponible"
 
@@ -1126,28 +1233,40 @@ def enriquecer_con_ia(config: dict, max_noticias: int = 10, progress_callback: C
     return enriquecidas
 
 
-def generar_resumen_individual(n_id: str, titulo: str) -> dict[str, Any]:
+def generar_resumen_individual(n_id: str, titulo: str, language: str | None = None) -> dict[str, Any]:
     """Genera un resumen para un único artículo con Gemini y persiste el resultado."""
+    lang = normalize_language(language)
     if not GEMINI_AVAILABLE:
         return {
             "ok": False,
-            "reason": "Gemini no está disponible. Instalá la dependencia google-genai.",
+            "reason": (
+                "Gemini is unavailable. Install the google-genai dependency."
+                if lang == "en"
+                else "Gemini no está disponible. Instalá la dependencia google-genai."
+            ),
         }
     if not GEMINI_API_KEY:
         return {
             "ok": False,
-            "reason": "Gemini no está configurado. Agregá GEMINI_API_KEY en .env y reiniciá la app.",
+            "reason": (
+                "Gemini is not configured. Add GEMINI_API_KEY to .env and restart the app."
+                if lang == "en"
+                else "Gemini no está configurado. Agregá GEMINI_API_KEY en .env y reiniciá la app."
+            ),
         }
 
     try:
-        raw = _generar_resumen_gemini(titulo, progress_callback=None, interactive=True)
+        raw = _generar_resumen_gemini(titulo, progress_callback=None, interactive=True, language=lang)
         parsed = _parsear_json_ia(raw)
         res = parsed["resumen"]
 
         with get_session() as session:
             nd = session.get(Noticia, n_id)
             if nd:
-                nd.resumen_ia = res
+                if lang == "en":
+                    nd.resumen_ia_en = res
+                else:
+                    nd.resumen_ia = res
             session.commit()
 
         if res == "Resumen no disponible":
@@ -1167,7 +1286,11 @@ def generar_resumen_individual(n_id: str, titulo: str) -> dict[str, Any]:
         logger.error("Error al generar resumen individual para la noticia %s: %s", n_id, e)
         return {
             "ok": False,
-            "reason": "No se pudo generar el resumen con Gemini. Revisá la configuración y volvé a intentar.",
+            "reason": (
+                "The summary could not be generated with Gemini. Check the configuration and try again."
+                if lang == "en"
+                else "No se pudo generar el resumen con Gemini. Revisá la configuración y volvé a intentar."
+            ),
         }
 
 

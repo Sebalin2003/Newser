@@ -34,6 +34,7 @@ class WebServiceTestCase(unittest.TestCase):
             finally:
                 session.close()
 
+        self.temporary_session = temporary_session
         self.session_patch = patch.object(web_services, "get_session", temporary_session)
         self.session_patch.start()
         self.dynamic_session_patch = patch.object(dynamic_keywords, "get_session", temporary_session)
@@ -55,6 +56,8 @@ class WebServiceTestCase(unittest.TestCase):
         url: str | None = None,
         media_url: str | None = None,
         media_type: str | None = None,
+        summary: str = "Resumen no disponible",
+        summary_en: str | None = None,
     ) -> None:
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
@@ -65,7 +68,8 @@ class WebServiceTestCase(unittest.TestCase):
                     url=url or f"https://example.test/{article_id}",
                     fuente=source,
                     descripcion_original=f"{title} description",
-                    resumen_ia="Resumen no disponible",
+                    resumen_ia=summary,
+                    resumen_ia_en=summary_en,
                     area_matcheada=area,
                     fecha_publicacion=published_at or now,
                     fecha_ingesta=now,
@@ -123,7 +127,7 @@ class WebServiceTestCase(unittest.TestCase):
             "OpenAI Blog",
             "ai_agents",
             90,
-            published_at=datetime.combine(today, datetime.min.time(), tzinfo=timezone.utc),
+            published_at=datetime(today.year, today.month, today.day, 15, tzinfo=timezone.utc),
         )
         self.add_article(
             "yesterday",
@@ -131,7 +135,7 @@ class WebServiceTestCase(unittest.TestCase):
             "OpenAI Blog",
             "ai_agents",
             80,
-            published_at=datetime.combine(yesterday, datetime.min.time(), tzinfo=timezone.utc),
+            published_at=datetime(yesterday.year, yesterday.month, yesterday.day, 15, tzinfo=timezone.utc),
         )
 
         today_result = web_services.get_feed(fecha=today.isoformat(), fuentes=["OpenAI Blog"])
@@ -275,6 +279,72 @@ class WebServiceTestCase(unittest.TestCase):
 
         self.assertFalse(result["ok"])
         self.assertIn("GEMINI_API_KEY", result["reason"])
+
+    def test_feed_uses_language_specific_summary_and_area_label(self) -> None:
+        today = datetime.now(web_services.BRIEF_TIMEZONE).date().isoformat()
+        self.add_article(
+            "localized",
+            "Localized story",
+            "OpenAI Blog",
+            "ai_agents",
+            90,
+            summary="Resumen español",
+            summary_en="English summary",
+        )
+
+        spanish = web_services.get_feed(fecha=today, lang="es")["items"][0]
+        english = web_services.get_feed(fecha=today, lang="en")["items"][0]
+
+        self.assertEqual(spanish["resumen_ia"], "Resumen español")
+        self.assertEqual(spanish["area_label"], "IA y agentes")
+        self.assertEqual(english["resumen_ia"], "English summary")
+        self.assertEqual(english["area_label"], "AI & Agents")
+
+    def test_english_feed_does_not_fall_back_to_spanish_summary(self) -> None:
+        today = datetime.now(web_services.BRIEF_TIMEZONE).date().isoformat()
+        self.add_article(
+            "spanish-only",
+            "Spanish only story",
+            "OpenAI Blog",
+            "ai_agents",
+            90,
+            summary="Resumen español",
+        )
+
+        item = web_services.get_feed(fecha=today, lang="en")["items"][0]
+
+        self.assertEqual(item["resumen_ia"], "")
+
+    def test_generate_english_summary_does_not_overwrite_spanish_cache(self) -> None:
+        self.add_article(
+            "needs-en",
+            "Needs English summary",
+            "Reuters",
+            "cybersecurity",
+            84,
+            summary="Resumen español",
+        )
+
+        with patch.dict(os.environ, {"GEMINI_API_KEY": "key"}, clear=False), \
+             patch("src.processor.GEMINI_AVAILABLE", True), \
+             patch("src.processor.GEMINI_API_KEY", "key"), \
+             patch("src.processor._generar_resumen_gemini", return_value='{"resumen":"English summary"}'), \
+             patch("src.processor.get_session", self.temporary_session):
+            result = web_services.generate_summary("needs-en", lang="en")
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["summary"], "English summary")
+        with self.session_factory() as session:
+            row = session.get(Noticia, "needs-en")
+            self.assertEqual(row.resumen_ia, "Resumen español")
+            self.assertEqual(row.resumen_ia_en, "English summary")
+
+    def test_missing_article_message_is_localized(self) -> None:
+        spanish = web_services.generate_summary("missing", lang="es")
+        english = web_services.generate_summary("missing", lang="en")
+
+        self.assertEqual(spanish["reason"], "Artículo no encontrado.")
+        self.assertEqual(english["reason"], "Article not found.")
 
     def test_suggestions_require_two_characters_and_limit_results(self) -> None:
         today = datetime.now(web_services.BRIEF_TIMEZONE).date().isoformat()
@@ -469,11 +539,12 @@ class WebApiRouteTests(unittest.TestCase):
         from fastapi.testclient import TestClient
         import web_app
 
-        with patch.object(web_app.web_services, "get_feed", return_value={"items": [], "count": 0, "hot_topics": []}):
-            response = TestClient(web_app.app).get("/api/feed")
+        with patch.object(web_app.web_services, "get_feed", return_value={"items": [], "count": 0, "hot_topics": []}) as get_feed:
+            response = TestClient(web_app.app).get("/api/feed?lang=en")
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["count"], 0)
+        self.assertEqual(get_feed.call_args.kwargs["lang"], "en")
 
     def test_summary_route_returns_clear_error_status(self) -> None:
         from fastapi.testclient import TestClient
@@ -483,11 +554,12 @@ class WebApiRouteTests(unittest.TestCase):
             web_app.web_services,
             "generate_summary",
             return_value={"ok": False, "reason": "GEMINI_API_KEY is missing."},
-        ):
-            response = TestClient(web_app.app).post("/api/articles/article-1/summary")
+        ) as generate_summary:
+            response = TestClient(web_app.app).post("/api/articles/article-1/summary?lang=en")
 
         self.assertEqual(response.status_code, 400)
         self.assertIn("GEMINI_API_KEY", response.json()["reason"])
+        self.assertEqual(generate_summary.call_args.kwargs["lang"], "en")
 
     def test_refresh_status_route_returns_stable_json(self) -> None:
         from fastapi.testclient import TestClient
@@ -513,11 +585,12 @@ class WebApiRouteTests(unittest.TestCase):
         from fastapi.testclient import TestClient
         import web_app
 
-        with patch.object(web_app.web_services, "get_past_daily_briefs", return_value={"items": []}):
-            response = TestClient(web_app.app).get("/api/daily-briefs")
+        with patch.object(web_app.web_services, "get_past_daily_briefs", return_value={"items": []}) as get_past:
+            response = TestClient(web_app.app).get("/api/daily-briefs?lang=en")
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"items": []})
+        self.assertEqual(get_past.call_args.kwargs["lang"], "en")
 
     def test_favorites_route_returns_items(self) -> None:
         from fastapi.testclient import TestClient
@@ -601,7 +674,7 @@ class WebUiStaticTests(unittest.TestCase):
         script = Path("static/app.js").read_text(encoding="utf-8")
 
         self.assertIn("data-multiselect", template)
-        self.assertIn("Select all", template)
+        self.assertIn("Seleccionar todo", template)
         self.assertIn('type="radio" name="orden"', template)
         self.assertNotIn("Refresh feed", template)
         self.assertNotIn("refreshButton", script)
@@ -631,20 +704,21 @@ class WebUiStaticTests(unittest.TestCase):
         script = Path("static/app.js").read_text(encoding="utf-8")
         styles = Path("static/app.css").read_text(encoding="utf-8")
 
-        self.assertIn("Today&rsquo;s Updates", template)
+        self.assertIn("Actualizaciones de hoy", template)
         self.assertIn('rel="icon"', template)
         self.assertIn("/assets/favicon.png?v=logo-v1", template)
         self.assertIn('rel="apple-touch-icon"', template)
         self.assertIn("/assets/apple-touch-icon.png?v=logo-v1", template)
         self.assertGreater(Path("assets/favicon.png").stat().st_size, 0)
         self.assertGreater(Path("assets/apple-touch-icon.png").stat().st_size, 0)
-        self.assertIn(r"Today\u2019s Updates", script)
-        self.assertIn('aria-label="Today’s Updates"', template)
-        self.assertIn("Daily Briefs", template)
-        self.assertIn("Favorites", template)
-        self.assertIn("Workspace", template)
-        self.assertIn("Feed controls", template)
-        self.assertIn("System status", template)
+        self.assertIn('"nav.today": "Actualizaciones de hoy"', script)
+        self.assertIn('"nav.today": "Today\'s Updates"', script)
+        self.assertIn('aria-label="Actualizaciones de hoy"', template)
+        self.assertIn("Briefs diarios", template)
+        self.assertIn("Favoritos", template)
+        self.assertIn("Espacio de trabajo", template)
+        self.assertIn("Controles del feed", template)
+        self.assertIn("Estado del sistema", template)
         self.assertIn('data-view-target="today"', template)
         self.assertIn('data-view-target="briefs"', template)
         self.assertIn('data-view-target="favorites"', template)
@@ -655,18 +729,18 @@ class WebUiStaticTests(unittest.TestCase):
         favorites_block = template.split('id="favorites"', maxsplit=1)[1].split('id="daily-briefs"', maxsplit=1)[0]
         self.assertNotIn("favorites-title", favorites_block)
         self.assertNotIn("Articles and repositories you marked for follow-up.", favorites_block)
-        self.assertIn("Executive summary", template)
-        self.assertIn("Previous daily briefs", template)
-        self.assertIn("previous 7 days", template)
+        self.assertIn("Resumen ejecutivo", template)
+        self.assertIn("Briefs diarios anteriores", template)
+        self.assertIn("últimos 7 días", template)
         self.assertIn("loadDailyBriefs", script)
         self.assertIn("loadFavorites", script)
-        self.assertIn('fetchJson("/api/brief")', script)
+        self.assertIn('fetchJson(withLanguage("/api/brief"))', script)
         self.assertIn("/api/daily-briefs", script)
         self.assertIn("/api/favorites", script)
         self.assertIn("/favorite", script)
         self.assertIn("favorite-button", script)
-        self.assertIn("Add to favorites", script)
-        self.assertIn("Remove from favorites", script)
+        self.assertIn('"article.addFavorite": "Add to favorites"', script)
+        self.assertIn('"article.removeFavorite": "Remove from favorites"', script)
         self.assertIn('item.fuente === "GitHub Trending"', script)
         self.assertIn("const summary = isRepository ? item.descripcion", script)
         self.assertIn("summary-button", script)
@@ -688,14 +762,20 @@ class WebUiStaticTests(unittest.TestCase):
         favorite_markup = script.split('const favoriteButton = `', maxsplit=1)[1].split("  return `", maxsplit=1)[0]
         self.assertNotIn("<span>", favorite_markup)
         self.assertIn("M8 13.8", script)
-        self.assertIn("Use the heart button", script)
+        self.assertIn("Usá el botón de corazón", script)
         self.assertNotIn("Saved to favorites.", script)
         self.assertNotIn("Removed from favorites.", script)
-        self.assertIn("/static/app.js?v=brief-catchup-v1", template)
-        self.assertIn("/static/app.css?v=brief-catchup-v1", template)
+        self.assertIn("/static/app.js?v=lang-v1", template)
+        self.assertIn("/static/app.css?v=lang-v1", template)
         self.assertIn('id="desktop-theme-toggle"', template)
         self.assertNotIn('id="mobile-theme-toggle"', template)
-        self.assertIn('aria-label="Switch to light mode"', template)
+        self.assertIn('aria-label="Cambiar a modo claro"', template)
+        self.assertIn('data-language-option="es"', template)
+        self.assertIn('data-language-option="en"', template)
+        self.assertIn('window.localStorage.getItem("newser.language")', script)
+        self.assertIn('window.localStorage.setItem("newser.language", nextLanguage)', script)
+        self.assertIn('return state.language === "en" ? "en-US" : "es-AR"', script)
+        self.assertIn('fetchJson(withLanguage(`/api/articles/${encodeURIComponent(articleId)}/summary`)', script)
         self.assertIn('document.documentElement.dataset.theme', template)
         self.assertIn('localStorage.getItem("newser.theme") || "dark"', template)
         self.assertIn("function initTheme()", script)
@@ -719,11 +799,11 @@ class WebUiStaticTests(unittest.TestCase):
         self.assertIn('params.set("fecha", "all")', script)
         self.assertIn("function syncDateMode()", script)
         self.assertIn("dateInput.disabled = allDates", script)
-        self.assertIn('dateModeLabel.textContent = allDates ? "All dates" : "Today"', script)
+        self.assertIn('dateModeLabel.textContent = allDates ? i18n("date.all") : i18n("date.today")', script)
         self.assertIn(".date-all-option", styles)
         self.assertIn("input:disabled", styles)
-        self.assertIn("Every morning at 8 o'clock", script)
-        self.assertIn("Today’s brief is being generated.", script)
+        self.assertIn('"brief.subtitle": "Every morning at 8 o\'clock"', script)
+        self.assertIn('"brief.generating": "Today\'s brief is being generated.', script)
         self.assertIn(".topbar-subtitle", styles)
         self.assertNotIn("topbarEyebrow", script)
         self.assertIn('search.value = ""', script)
@@ -775,14 +855,14 @@ class WebUiStaticTests(unittest.TestCase):
         self.assertIn('data-view-target="system"', template)
         self.assertNotIn('id="refresh-status"', template)
         self.assertIn('id="system-status"', template)
-        self.assertIn("Operations overview", template)
+        self.assertIn("Resumen operativo", template)
         self.assertIn('id="system-health"', template)
         self.assertIn('id="system-metrics"', template)
         self.assertIn('id="source-breakdown"', template)
         self.assertIn('state.view === "system"', script)
         self.assertIn("loadSystemStatus", script)
-        self.assertIn('fetchJson("/api/stats")', script)
-        self.assertIn('fetchJson("/api/refresh-status")', script)
+        self.assertIn('fetchJson(withLanguage("/api/stats"))', script)
+        self.assertIn('fetchJson(withLanguage("/api/refresh-status"))', script)
         self.assertIn("renderSourceBreakdown", script)
         self.assertIn("view-system", script)
         system_hide_block = styles.split("body.view-system .today-only,", maxsplit=1)[1].split("{", maxsplit=1)[0]
@@ -795,10 +875,10 @@ class WebUiStaticTests(unittest.TestCase):
         script = Path("static/app.js").read_text(encoding="utf-8")
         styles = Path("static/app.css").read_text(encoding="utf-8")
 
-        self.assertIn("No multi-source hot topics for this date yet.", script)
+        self.assertIn('"topics.empty": "No multi-source hot topics for this date yet."', script)
         self.assertIn("topic.sources", script)
         self.assertIn("topic.supporting_items", script)
-        self.assertIn("Supporting articles", script)
+        self.assertIn('"topics.supporting": "Supporting articles"', script)
         self.assertIn("topic-source-chip", script)
         self.assertIn("topic-support-item", script)
         self.assertIn(".topic-source-chip", styles)
@@ -821,7 +901,8 @@ class WebUiStaticTests(unittest.TestCase):
         brand_block = template.split('class="brand"', maxsplit=1)[1].split('id="sidebar-toggle"', maxsplit=1)[0]
         self.assertNotIn("<h1>Newser</h1>", brand_block)
         self.assertIn("brand-tagline", brand_block)
-        self.assertIn("IT News Trend Analyzer", brand_block)
+        self.assertIn("Analizador de tendencias IT", brand_block)
+        self.assertIn("IT News Trend Analyzer", script)
         self.assertNotIn('id="theme-toggle"', brand_block)
         self.assertIn('id="desktop-theme-toggle"', template)
         self.assertIn("sidebar-theme-section", template)
@@ -862,8 +943,8 @@ class WebUiStaticTests(unittest.TestCase):
         self.assertNotIn("Feed filters", mobile_more)
         self.assertNotIn("data-mobile-open-drawer", mobile_more)
         self.assertNotIn("mobile-more-hero", mobile_more)
-        self.assertIn("System Status", mobile_more)
-        self.assertIn("Appearance", mobile_more)
+        self.assertIn("Estado del sistema", mobile_more)
+        self.assertIn("Apariencia", mobile_more)
         self.assertNotIn("About", mobile_more)
         self.assertNotIn("IT News Trend Analyzer for AI", mobile_more)
         self.assertIn("mobile-more-theme-toggle", mobile_more)
@@ -871,7 +952,7 @@ class WebUiStaticTests(unittest.TestCase):
         self.assertIn("mobile-theme-state", mobile_more)
         self.assertIn("sidebar-theme-icon", mobile_more)
         self.assertIn("sidebar-theme-copy", mobile_more)
-        self.assertIn("Switch between dark and light mode.", mobile_more)
+        self.assertIn("Cambiar entre modo oscuro y claro.", mobile_more)
         self.assertNotIn("mobile-more-theme-indicator", mobile_more)
         self.assertIn("function initMobileShell()", script)
         self.assertIn("function openMobileDrawer()", script)

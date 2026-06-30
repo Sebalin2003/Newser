@@ -71,6 +71,40 @@ AREAS = {
     "Chips & Hardware": "chips_hardware",
 }
 
+AREA_LABELS_BY_LANG = {
+    "es": {
+        "ai_agents": "IA y agentes",
+        "developer_tools": "Herramientas dev",
+        "cybersecurity": "Ciberseguridad",
+        "infrastructure_cloud": "Infraestructura y cloud",
+        "chips_hardware": "Chips y hardware",
+        "general": "General",
+    },
+    "en": {
+        "ai_agents": "AI & Agents",
+        "developer_tools": "Developer Tools",
+        "cybersecurity": "Cybersecurity",
+        "infrastructure_cloud": "Infrastructure & Cloud",
+        "chips_hardware": "Chips & Hardware",
+        "general": "General",
+    },
+}
+
+MESSAGES = {
+    "es": {
+        "article_not_found": "Artículo no encontrado.",
+        "missing_key": "Falta GEMINI_API_KEY. Agregala a .env y reiniciá la app.",
+        "source": "Fuente",
+        "untitled": "Sin título",
+    },
+    "en": {
+        "article_not_found": "Article not found.",
+        "missing_key": "GEMINI_API_KEY is missing. Add it to .env and restart the app.",
+        "source": "Source",
+        "untitled": "Untitled",
+    },
+}
+
 AREA_COMPATIBILITY = {
     "inteligencia_artificial": "ai_agents",
     "ai_agents": "ai_agents",
@@ -93,6 +127,23 @@ AREA_DB_KEYS_BY_CORE = {
     core: sorted(area for area, mapped in AREA_COMPATIBILITY.items() if mapped == core)
     for core in set(AREA_COMPATIBILITY.values())
 }
+
+
+def normalize_language(lang: str | None = None) -> str:
+    return "en" if str(lang or "").strip().lower().startswith("en") else "es"
+
+
+def t(key: str, lang: str | None = None) -> str:
+    selected = normalize_language(lang)
+    return MESSAGES[selected].get(key, MESSAGES["es"].get(key, key))
+
+
+def area_options(lang: str | None = None) -> dict[str, str]:
+    selected = normalize_language(lang)
+    return {
+        AREA_LABELS_BY_LANG[selected][key]: key
+        for key in ["ai_agents", "developer_tools", "cybersecurity", "infrastructure_cloud", "chips_hardware"]
+    }
 
 
 def initialize() -> None:
@@ -131,9 +182,9 @@ def core_area_key(area_key: str | None) -> str:
     return AREA_COMPATIBILITY.get(str(area_key or "general"), "general")
 
 
-def area_label(area_key: str | None) -> str:
+def area_label(area_key: str | None, lang: str | None = None) -> str:
     key = core_area_key(area_key)
-    return AREA_LABEL_BY_KEY.get(key, key.replace("_", " ").title())
+    return AREA_LABELS_BY_LANG[normalize_language(lang)].get(key, AREA_LABEL_BY_KEY.get(key, key.replace("_", " ").title()))
 
 
 def area_filter_keys(area_keys: list[str] | tuple[str, ...]) -> list[str]:
@@ -240,11 +291,13 @@ def _effective_datetime(item: dict[str, Any]) -> datetime | None:
     return parsed.astimezone(timezone.utc)
 
 
-def _serialize_article(n: Noticia, config: dict[str, Any]) -> dict[str, Any]:
+def _serialize_article(n: Noticia, config: dict[str, Any], lang: str | None = None) -> dict[str, Any]:
+    selected_lang = normalize_language(lang)
     score = _score_display_fields(n, config)
     tags = parse_tags(score["tags_json"])
     title = str(n.titulo or "")
     label = re.sub(r"^\[\w+\]\s*", "", title).split("(+")[0].strip()[:80]
+    summary = str(n.resumen_ia_en or "") if selected_lang == "en" else str(n.resumen_ia or "")
     return {
         "id": str(n.id or ""),
         "titulo": title,
@@ -254,17 +307,17 @@ def _serialize_article(n: Noticia, config: dict[str, Any]) -> dict[str, Any]:
         "fuente": str(n.fuente or ""),
         "area": str(n.area_matcheada or "general"),
         "area_key": core_area_key(n.area_matcheada),
-        "area_label": area_label(n.area_matcheada),
+        "area_label": area_label(n.area_matcheada, selected_lang),
         "fecha_publicacion": _iso(n.fecha_publicacion),
         "fecha_ingesta": _iso(n.fecha_ingesta),
         "descripcion": str(n.descripcion_original or ""),
-        "resumen_ia": str(n.resumen_ia or ""),
+        "resumen_ia": summary,
         "selected_score": float(score["selected_score"] or 0),
         "tags": tags,
         "comments": int(n.num_comentarios or 0),
         "ranking": n.ranking,
         "metric": _metric_from_title(title, str(n.fuente or "")),
-        "selection_reason": score["selection_reason"],
+        "selection_reason": score["selection_reason"] if selected_lang == "es" else "",
         "is_favorite": bool(n.is_favorite),
         "favorited_at": _iso(n.favorited_at),
         "media_url": str(n.media_url or ""),
@@ -335,7 +388,9 @@ def get_feed(
     orden: str = "Puntaje",
     q: str | None = None,
     limit: int = 80,
+    lang: str | None = None,
 ) -> dict[str, Any]:
+    selected_lang = normalize_language(lang)
     config = load_config()
     all_dates = is_all_dates_filter(fecha)
     selected_date = None if all_dates else parse_filter_date(fecha)
@@ -353,6 +408,7 @@ def get_feed(
                     Noticia.titulo.ilike(pattern),
                     Noticia.descripcion_original.ilike(pattern),
                     Noticia.resumen_ia.ilike(pattern),
+                    Noticia.resumen_ia_en.ilike(pattern),
                 )
             )
         elif not all_dates:
@@ -362,7 +418,7 @@ def get_feed(
         if area_filter:
             query = query.filter(Noticia.area_matcheada.in_(area_filter_keys(area_filter)))
         rows = query.order_by(Noticia.fecha_ingesta.desc()).limit(300).all()
-        items = [_serialize_article(row, config) for row in rows]
+        items = [_serialize_article(row, config, selected_lang) for row in rows]
     if selected_date is not None:
         items = [item for item in items if _matches_date(item, selected_date)]
     items = _dedupe_feed_items(_sort_items(items, orden))[:limit]
@@ -371,11 +427,12 @@ def get_feed(
         "count": len(items),
         "fecha": "all" if all_dates else selected_date.isoformat(),
         "orden": orden,
-        "hot_topics": [] if all_dates else get_hot_topics(selected_date),
+        "hot_topics": [] if all_dates else get_hot_topics(selected_date, lang=selected_lang),
     }
 
 
-def get_brief(fecha: str | None = None) -> dict[str, Any]:
+def get_brief(fecha: str | None = None, lang: str | None = None) -> dict[str, Any]:
+    selected_lang = normalize_language(lang)
     selected_date = parse_filter_date(fecha)
     with get_session() as session:
         brief = session.query(MacroResumen).filter(MacroResumen.fecha == selected_date).first()
@@ -391,7 +448,24 @@ def get_brief(fecha: str | None = None) -> dict[str, Any]:
                 "catchup_running": _daily_brief_lock.locked(),
                 "catchup_error": _daily_brief_state.get("last_error"),
             }
-        return {"available": True, **_serialize_brief(brief)}
+        if selected_lang == "en" and not (brief.texto_en or brief.brief_json_en):
+            current_date = datetime.now(BRIEF_TIMEZONE).date()
+            if selected_date == current_date:
+                from src.processor import generar_macro_resumen_dia
+
+                result = generar_macro_resumen_dia(load_config(), language="en")
+                if result.get("macro_resumen_generado") is not False:
+                    session.expire_all()
+                    brief = session.query(MacroResumen).filter(MacroResumen.fecha == selected_date).first()
+            if not (brief and (brief.texto_en or brief.brief_json_en)):
+                return {
+                    "available": False,
+                    "fecha": selected_date.isoformat(),
+                    "catchup_started": False,
+                    "catchup_running": False,
+                    "catchup_error": None,
+                }
+        return {"available": True, **_serialize_brief(brief, selected_lang)}
 
 
 def daily_brief_exists(brief_date: date | None = None) -> bool:
@@ -435,25 +509,28 @@ def ensure_daily_brief_catchup(background: bool = True) -> bool:
     return True
 
 
-def _serialize_brief(brief: MacroResumen) -> dict[str, Any]:
+def _serialize_brief(brief: MacroResumen, lang: str | None = None) -> dict[str, Any]:
+    selected_lang = normalize_language(lang)
+    raw_json = brief.brief_json_en if selected_lang == "en" else brief.brief_json
     parsed = None
-    if brief.brief_json:
+    if raw_json:
         try:
-            parsed = json.loads(brief.brief_json)
+            parsed = json.loads(raw_json)
         except json.JSONDecodeError:
             parsed = None
     return {
         "fecha": brief.fecha.isoformat() if brief.fecha else "",
-        "texto": brief.texto,
+        "texto": brief.texto_en if selected_lang == "en" else brief.texto,
         "n_noticias": brief.n_noticias,
         "n_clusters": brief.n_clusters,
-        "modelo": brief.modelo or "N/A",
+        "modelo": (brief.modelo_en if selected_lang == "en" else brief.modelo) or "N/A",
         "brief_json": parsed,
-        "fecha_generacion": _iso(brief.fecha_generacion),
+        "fecha_generacion": _iso(brief.fecha_generacion_en if selected_lang == "en" else brief.fecha_generacion),
     }
 
 
-def get_past_daily_briefs(today: date | None = None) -> dict[str, list[dict[str, Any]]]:
+def get_past_daily_briefs(today: date | None = None, lang: str | None = None) -> dict[str, list[dict[str, Any]]]:
+    selected_lang = normalize_language(lang)
     current = today or datetime.now(BRIEF_TIMEZONE).date()
     newest = current - timedelta(days=1)
     oldest = current - timedelta(days=7)
@@ -464,11 +541,14 @@ def get_past_daily_briefs(today: date | None = None) -> dict[str, list[dict[str,
             .order_by(MacroResumen.fecha.desc())
             .all()
         )
-        items = [_serialize_brief(row) for row in rows]
+        items = [_serialize_brief(row, selected_lang) for row in rows]
+    if selected_lang == "en":
+        items = [item for item in items if item.get("texto") or item.get("brief_json")]
     return {"items": items}
 
 
-def get_favorites() -> dict[str, Any]:
+def get_favorites(lang: str | None = None) -> dict[str, Any]:
+    selected_lang = normalize_language(lang)
     config = load_config()
     with get_session() as session:
         rows = (
@@ -477,15 +557,16 @@ def get_favorites() -> dict[str, Any]:
             .order_by(Noticia.favorited_at.desc(), Noticia.fecha_ingesta.desc())
             .all()
         )
-        items = [_serialize_article(row, config) for row in rows]
+        items = [_serialize_article(row, config, selected_lang) for row in rows]
     return {"items": items, "count": len(items)}
 
 
-def mark_favorite(article_id: str) -> dict[str, Any]:
+def mark_favorite(article_id: str, lang: str | None = None) -> dict[str, Any]:
+    selected_lang = normalize_language(lang)
     with get_session() as session:
         article = session.query(Noticia).filter(Noticia.id == article_id).first()
         if not article:
-            return {"ok": False, "reason": "Article not found."}
+            return {"ok": False, "reason": t("article_not_found", selected_lang)}
         if not article.is_favorite:
             article.is_favorite = 1
             article.favorited_at = datetime.now(timezone.utc)
@@ -497,17 +578,19 @@ def mark_favorite(article_id: str) -> dict[str, Any]:
         }
 
 
-def remove_favorite(article_id: str) -> dict[str, Any]:
+def remove_favorite(article_id: str, lang: str | None = None) -> dict[str, Any]:
+    selected_lang = normalize_language(lang)
     with get_session() as session:
         article = session.query(Noticia).filter(Noticia.id == article_id).first()
         if not article:
-            return {"ok": False, "reason": "Article not found."}
+            return {"ok": False, "reason": t("article_not_found", selected_lang)}
         article.is_favorite = 0
         article.favorited_at = None
         return {"ok": True, "id": str(article.id), "is_favorite": False, "favorited_at": None}
 
 
-def get_stats() -> dict[str, Any]:
+def get_stats(lang: str | None = None) -> dict[str, Any]:
+    selected_lang = normalize_language(lang)
     cutoff_24h = datetime.now(timezone.utc) - timedelta(hours=24)
     with get_session() as session:
         total = session.query(Noticia).count()
@@ -530,7 +613,8 @@ def get_stats() -> dict[str, Any]:
         source_rows = session.query(Noticia.fuente).all()
     source_counts: dict[str, int] = {}
     for (source,) in source_rows:
-        source_counts[str(source or "Fuente")] = source_counts.get(str(source or "Fuente"), 0) + 1
+        label = str(source or t("source", selected_lang))
+        source_counts[label] = source_counts.get(label, 0) + 1
     return {
         "total_corpus": total,
         "noticias_24h": recent,
@@ -547,6 +631,7 @@ def get_suggestions(
     fecha: str | None = None,
     fuentes: list[str] | None = None,
     areas: list[str] | None = None,
+    lang: str | None = None,
 ) -> list[dict[str, Any]]:
     query_text = q.strip()
     if len(query_text) < 2:
@@ -557,6 +642,7 @@ def get_suggestions(
         areas=areas,
         q=query_text,
         limit=5,
+        lang=lang,
     )
     return [
         {
@@ -569,21 +655,22 @@ def get_suggestions(
     ]
 
 
-def generate_summary(article_id: str) -> dict[str, Any]:
+def generate_summary(article_id: str, lang: str | None = None) -> dict[str, Any]:
+    selected_lang = normalize_language(lang)
     with get_session() as session:
         article = session.query(Noticia).filter(Noticia.id == article_id).first()
         if not article:
-            return {"ok": False, "reason": "Article not found."}
-        existing = str(article.resumen_ia or "").strip()
+            return {"ok": False, "reason": t("article_not_found", selected_lang)}
+        existing = str((article.resumen_ia_en if selected_lang == "en" else article.resumen_ia) or "").strip()
         if existing and existing != "Resumen no disponible":
             return {"ok": True, "summary": existing, "cached": True}
         title = str(article.titulo or "")
 
     if not os.getenv("GEMINI_API_KEY", "").strip():
-        return {"ok": False, "reason": "GEMINI_API_KEY is missing. Add it to .env and restart the app."}
+        return {"ok": False, "reason": t("missing_key", selected_lang)}
     from src.processor import generar_resumen_individual
 
-    return generar_resumen_individual(article_id, title)
+    return generar_resumen_individual(article_id, title, language=selected_lang)
 
 
 def refresh_feed() -> dict[str, Any]:
@@ -828,8 +915,9 @@ def _cluster_unassigned_topics(items: list[dict[str, Any]]) -> list[list[dict[st
     return [[items[index] for index in cluster] for cluster in clusters]
 
 
-def _serialize_hot_topic(items: list[dict[str, Any]]) -> dict[str, Any] | None:
-    sources = sorted({str(item.get("fuente") or "Fuente") for item in items})
+def _serialize_hot_topic(items: list[dict[str, Any]], lang: str | None = None) -> dict[str, Any] | None:
+    selected_lang = normalize_language(lang)
+    sources = sorted({str(item.get("fuente") or t("source", selected_lang)) for item in items})
     if len(sources) < HOT_TOPIC_MIN_SOURCES:
         return None
     sorted_items = sorted(
@@ -838,7 +926,7 @@ def _serialize_hot_topic(items: list[dict[str, Any]]) -> dict[str, Any] | None:
         reverse=True,
     )
     representative = sorted_items[0]
-    title = representative.get("label") or representative.get("titulo") or "Untitled"
+    title = representative.get("label") or representative.get("titulo") or t("untitled", selected_lang)
     return {
         "topic": _topic_label(items, representative),
         "title": title,
@@ -850,8 +938,8 @@ def _serialize_hot_topic(items: list[dict[str, Any]]) -> dict[str, Any] | None:
         "supporting_items": [
             {
                 "id": item.get("id"),
-                "title": item.get("label") or item.get("titulo") or "Untitled",
-                "source": item.get("fuente") or "Fuente",
+                "title": item.get("label") or item.get("titulo") or t("untitled", selected_lang),
+                "source": item.get("fuente") or t("source", selected_lang),
                 "score": float(item.get("selected_score") or 0),
                 "url": item.get("url") or "",
             }
@@ -861,7 +949,8 @@ def _serialize_hot_topic(items: list[dict[str, Any]]) -> dict[str, Any] | None:
     }
 
 
-def get_hot_topics(selected_date: date) -> list[dict[str, Any]]:
+def get_hot_topics(selected_date: date, lang: str | None = None) -> list[dict[str, Any]]:
+    selected_lang = normalize_language(lang)
     config = load_config()
     cutoff = datetime.now(timezone.utc) - timedelta(days=FILTER_WINDOW_DAYS)
     with get_session() as session:
@@ -872,7 +961,7 @@ def get_hot_topics(selected_date: date) -> list[dict[str, Any]]:
             .limit(500)
             .all()
         )
-        items = [_serialize_article(row, config) | {"cluster_id": row.cluster_id} for row in rows]
+        items = [_serialize_article(row, config, selected_lang) | {"cluster_id": row.cluster_id} for row in rows]
 
     day_items = [item for item in items if _matches_date(item, selected_date)]
     grouped: list[list[dict[str, Any]]] = []
@@ -887,7 +976,7 @@ def get_hot_topics(selected_date: date) -> list[dict[str, Any]]:
     grouped.extend(cluster_groups.values())
     grouped.extend(_cluster_unassigned_topics(unassigned))
 
-    topics = [topic for group in grouped if (topic := _serialize_hot_topic(group))]
+    topics = [topic for group in grouped if (topic := _serialize_hot_topic(group, selected_lang))]
     topics.sort(
         key=lambda topic: (
             topic["source_count"],

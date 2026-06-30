@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="es">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -8,29 +8,30 @@
   <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png?v=logo-v1">
   <script>
     document.documentElement.dataset.theme = localStorage.getItem("newser.theme") || "dark";
+    document.documentElement.lang = localStorage.getItem("newser.language") || "es";
   </script>
-  <link rel="stylesheet" href="/static/app.css?v=brief-catchup-v1">
+  <link rel="stylesheet" href="/static/app.css?v=lang-v1">
 </head>
 <body>
   <aside class="sidebar">
     <div class="sidebar-top">
       <div class="brand">
         <img src="/assets/newser-lockup.png" alt="Newser" onerror="this.style.display='none'">
-        <p class="brand-tagline">IT News Trend Analyzer</p>
+        <p class="brand-tagline" data-i18n="brand.tagline">Analizador de tendencias IT</p>
       </div>
       <div class="sidebar-tools">
-        <button id="sidebar-toggle" class="sidebar-toggle" type="button" aria-label="Collapse sidebar" aria-expanded="true">
+        <button id="sidebar-toggle" class="sidebar-toggle" type="button" aria-label="Contraer barra lateral" data-i18n-aria-label="sidebar.collapse" aria-expanded="true">
           <span aria-hidden="true"></span>
         </button>
       </div>
     </div>
 
-    <nav class="sidebar-section mode-nav" aria-label="Main navigation">
+    <nav class="sidebar-section mode-nav" aria-label="Navegación principal" data-i18n-aria-label="nav.main">
       <div class="sidebar-section-head">
-        <p class="eyebrow">Workspace</p>
-        <span>3 modes</span>
+        <p class="eyebrow" data-i18n="nav.workspace">Espacio de trabajo</p>
+        <span data-i18n="nav.modes">3 modos</span>
       </div>
-      <button type="button" class="nav-button active" data-view-target="today" aria-label="Today’s Updates">
+      <button type="button" class="nav-button active" data-view-target="today" aria-label="Actualizaciones de hoy" data-i18n-aria-label="nav.today">
         <span class="nav-icon" aria-hidden="true">
           <svg viewBox="0 0 24 24" focusable="false">
             <path d="M20 12a8 8 0 0 1-13.7 5.65"></path>
@@ -40,11 +41,11 @@
           </svg>
         </span>
         <span>
-          <strong>Today&rsquo;s Updates</strong>
-          <small>Live articles, repositories, topics, and search.</small>
+          <strong data-i18n="nav.today">Actualizaciones de hoy</strong>
+          <small data-i18n="nav.todayDesc">Artículos, repositorios, temas y búsqueda en vivo.</small>
         </span>
       </button>
-      <button type="button" class="nav-button" data-view-target="briefs" aria-label="Daily Briefs">
+      <button type="button" class="nav-button" data-view-target="briefs" aria-label="Briefs diarios" data-i18n-aria-label="nav.briefs">
         <span class="nav-icon" aria-hidden="true">
           <svg viewBox="0 0 24 24" focusable="false">
             <path d="M7 3.5h7l3 3v14H7z"></path>
@@ -56,19 +57,19 @@
           </svg>
         </span>
         <span>
-          <strong>Daily Briefs</strong>
-          <small>Today’s executive summary and previous 7 days.</small>
+          <strong data-i18n="nav.briefs">Briefs diarios</strong>
+          <small data-i18n="nav.briefsDesc">Resumen ejecutivo de hoy y últimos 7 días.</small>
         </span>
       </button>
-      <button type="button" class="nav-button" data-view-target="favorites" aria-label="Favorites">
+      <button type="button" class="nav-button" data-view-target="favorites" aria-label="Favoritos" data-i18n-aria-label="nav.favorites">
         <span class="nav-icon" aria-hidden="true">
           <svg viewBox="0 0 24 24" focusable="false">
             <path d="M12 20.2 10.65 19C5.85 14.65 3 12.05 3 8.85 3 6.25 5.05 4.2 7.65 4.2c1.45 0 2.85.68 3.75 1.75h1.2c.9-1.07 2.3-1.75 3.75-1.75 2.6 0 4.65 2.05 4.65 4.65 0 3.2-2.85 5.8-7.65 10.15z"></path>
           </svg>
         </span>
         <span>
-          <strong>Favorites</strong>
-          <small>Saved articles and repositories.</small>
+          <strong data-i18n="nav.favorites">Favoritos</strong>
+          <small data-i18n="nav.favoritesDesc">Artículos y repositorios guardados.</small>
         </span>
       </button>
     </nav>
@@ -76,28 +77,28 @@
     <form id="filters" class="filters">
       <div class="sidebar-section feed-controls">
         <div class="sidebar-section-head">
-          <p class="eyebrow">Feed controls</p>
-          <span data-date-mode-label>Today</span>
+          <p class="eyebrow" data-i18n="filters.title">Controles del feed</p>
+          <span data-date-mode-label>Hoy</span>
         </div>
 
         <label class="field">
-          <span>Date</span>
+          <span data-i18n="filters.date">Fecha</span>
           <input type="date" name="fecha" min="{{ min_date }}" max="{{ max_date }}" value="{{ max_date }}">
         </label>
         <label class="check date-all-option">
           <input type="checkbox" data-all-dates>
-          <span>All dates</span>
+          <span data-i18n="filters.allDates">Todas las fechas</span>
         </label>
 
         <div class="multi-select" data-multiselect>
           <button class="multi-select-button" type="button" aria-haspopup="listbox" aria-expanded="false">
-            <span data-label>All sources</span>
+            <span data-label data-i18n="filters.allSources">Todas las fuentes</span>
             <span class="chevron" aria-hidden="true"></span>
           </button>
           <div class="multi-select-menu" role="listbox">
             <label class="check select-all">
               <input type="checkbox" data-select-all checked>
-              <span>Select all</span>
+              <span data-i18n="filters.selectAll">Seleccionar todo</span>
             </label>
           {% for source in sources %}
             <label class="check">
@@ -110,51 +111,55 @@
 
         <div class="multi-select" data-multiselect>
           <button class="multi-select-button" type="button" aria-haspopup="listbox" aria-expanded="false">
-            <span data-label>All areas</span>
+            <span data-label data-i18n="filters.allAreas">Todas las áreas</span>
             <span class="chevron" aria-hidden="true"></span>
           </button>
           <div class="multi-select-menu" role="listbox">
             <label class="check select-all">
               <input type="checkbox" data-select-all checked>
-              <span>Select all</span>
+              <span data-i18n="filters.selectAll">Seleccionar todo</span>
             </label>
           {% for label, key in areas.items() %}
             <label class="check">
               <input type="checkbox" name="areas" value="{{ key }}" checked>
-              <span>{{ label }}</span>
+              <span data-area-label="{{ key }}">{{ label }}</span>
             </label>
           {% endfor %}
           </div>
         </div>
 
-        <fieldset class="segmented" aria-label="Order">
-          <legend>Order</legend>
+        <fieldset class="segmented" aria-label="Orden" data-i18n-aria-label="filters.order">
+          <legend data-i18n="filters.order">Orden</legend>
           <label>
             <input type="radio" name="orden" value="Puntaje" checked>
-            <span>Score</span>
+            <span data-i18n="filters.score">Puntaje</span>
           </label>
           <label>
             <input type="radio" name="orden" value="Mas reciente">
-            <span>Most recent</span>
+            <span data-i18n="filters.recent">Más reciente</span>
           </label>
         </fieldset>
       </div>
 
       <div class="sidebar-section system-section">
         <div class="sidebar-section-head">
-          <p class="eyebrow">System status</p>
+          <p class="eyebrow" data-i18n="system.status">Estado del sistema</p>
           <span>Auto</span>
         </div>
         <button id="system-status-button" class="system-status-button" type="button" data-view-target="system">
           <span>
-            <strong>Open System Status</strong>
-            <small>Health, metrics, and source coverage.</small>
+            <strong data-i18n="system.open">Abrir estado del sistema</strong>
+            <small data-i18n="system.openDesc">Salud, métricas y cobertura de fuentes.</small>
           </span>
         </button>
       </div>
     </form>
     <div class="sidebar-theme-section">
-      <button id="desktop-theme-toggle" class="sidebar-theme-toggle" type="button" aria-label="Switch to light mode" aria-pressed="false">
+      <div class="language-toggle" role="group" aria-label="Idioma" data-i18n-aria-label="prefs.language">
+        <button type="button" data-language-option="es" aria-pressed="true">ES</button>
+        <button type="button" data-language-option="en" aria-pressed="false">EN</button>
+      </div>
+      <button id="desktop-theme-toggle" class="sidebar-theme-toggle" type="button" aria-label="Cambiar a modo claro" data-i18n-aria-label="theme.toLight" aria-pressed="false">
         <span class="sidebar-theme-icon" aria-hidden="true">
           <svg class="theme-icon theme-icon-sun" viewBox="0 0 24 24" focusable="false">
             <circle cx="12" cy="12" r="4"></circle>
@@ -165,8 +170,8 @@
           </svg>
         </span>
         <span class="sidebar-theme-copy">
-          <strong>Appearance</strong>
-          <small>Switch theme</small>
+          <strong data-i18n="prefs.appearance">Apariencia</strong>
+          <small data-i18n="prefs.switchTheme">Cambiar tema</small>
         </span>
       </button>
     </div>
@@ -177,10 +182,10 @@
     <header class="mobile-appbar">
       <div class="mobile-brand">
         <img src="/assets/newser-lockup.png" alt="Newser" onerror="this.style.display='none'">
-        <span id="mobile-view-label">Updates</span>
+        <span id="mobile-view-label">Actualizaciones</span>
       </div>
       <div class="mobile-appbar-actions">
-        <button id="mobile-menu-toggle" class="mobile-menu-toggle" type="button" aria-label="Open filters and settings" aria-expanded="false">
+        <button id="mobile-menu-toggle" class="mobile-menu-toggle" type="button" aria-label="Abrir filtros y ajustes" data-i18n-aria-label="mobile.openFilters" aria-expanded="false">
           <span aria-hidden="true"></span>
         </button>
       </div>
@@ -189,14 +194,14 @@
     <header class="topbar">
       <div>
         <h2>
-          <span id="topbar-title-main">Today&rsquo;s Updates</span>
+          <span id="topbar-title-main">Actualizaciones de hoy</span>
           <span id="topbar-date" class="topbar-date" hidden></span>
         </h2>
         <p id="topbar-subtitle" class="topbar-subtitle" hidden></p>
       </div>
       <div class="search today-only">
-        <input id="search" type="text" placeholder="Search corpus" autocomplete="off">
-        <button id="clear-search" type="button" title="Clear search">x</button>
+        <input id="search" type="text" placeholder="Buscar en el corpus" data-i18n-placeholder="search.placeholder" autocomplete="off">
+        <button id="clear-search" type="button" title="Limpiar búsqueda" data-i18n-title="search.clear">x</button>
         <div id="suggestions" class="suggestions" hidden></div>
       </div>
     </header>
@@ -205,7 +210,7 @@
 
     <section class="panel overview-only" id="topics-panel">
       <div class="section-title compact-title">
-        <h3>Hot topics</h3>
+        <h3 data-i18n="topics.hot">Temas activos</h3>
       </div>
       <div id="hot-topics" class="topic-list"></div>
     </section>
@@ -213,7 +218,7 @@
     <section class="feed-block">
       <div class="feed-head">
         <div>
-          <h3 id="feed-title">Trends</h3>
+          <h3 id="feed-title">Tendencias</h3>
         </div>
         <p id="feed-meta"></p>
       </div>
@@ -227,14 +232,14 @@
     <section id="daily-briefs" class="daily-briefs archive-workspace" hidden>
       <section class="panel" id="brief">
         <div class="section-title">
-          <p class="eyebrow">Today</p>
-          <h3>Executive summary</h3>
+          <p class="eyebrow" data-i18n="date.today">Hoy</p>
+          <h3 data-i18n="brief.executive">Resumen ejecutivo</h3>
         </div>
-        <div class="empty">Loading brief...</div>
+        <div class="empty" data-i18n="brief.loading">Cargando brief...</div>
       </section>
       <div class="section-title archive-title">
-        <p class="eyebrow">Archive</p>
-        <h3>Previous daily briefs</h3>
+        <p class="eyebrow" data-i18n="brief.archive">Archivo</p>
+        <h3 data-i18n="brief.previous">Briefs diarios anteriores</h3>
       </div>
       <div id="daily-briefs-list" class="daily-brief-list"></div>
     </section>
@@ -242,18 +247,27 @@
     <section id="mobile-more" class="mobile-more-view" hidden>
       <div class="mobile-more-groups">
         <section class="mobile-more-card">
-          <p class="eyebrow">Content</p>
+          <p class="eyebrow" data-i18n="mobile.content">Contenido</p>
           <button type="button" data-view-target="system">
             <span>
-              <strong>System Status</strong>
-              <small>Update health, metrics, and sources.</small>
+              <strong data-i18n="system.status">Estado del sistema</strong>
+              <small data-i18n="system.mobileDesc">Salud de actualización, métricas y fuentes.</small>
             </span>
             <span aria-hidden="true">&rsaquo;</span>
           </button>
         </section>
         <section class="mobile-more-card">
-          <p class="eyebrow">Preferences</p>
-          <button class="sidebar-theme-toggle mobile-more-theme-toggle" type="button" data-mobile-theme-action aria-label="Switch to light mode" aria-pressed="false">
+          <p class="eyebrow" data-i18n="prefs.title">Preferencias</p>
+          <div class="mobile-setting-row">
+            <span class="mobile-setting-copy">
+              <strong data-i18n="prefs.language">Idioma</strong>
+            </span>
+            <span class="mobile-language-toggle language-toggle" role="group" aria-label="Idioma" data-i18n-aria-label="prefs.language">
+              <button type="button" data-language-option="es" aria-pressed="true">ES</button>
+              <button type="button" data-language-option="en" aria-pressed="false">EN</button>
+            </span>
+          </div>
+          <button class="sidebar-theme-toggle mobile-more-theme-toggle mobile-setting-row" type="button" data-mobile-theme-action aria-label="Cambiar a modo claro" data-i18n-aria-label="theme.toLight" aria-pressed="false">
             <span class="mobile-theme-main">
               <span class="sidebar-theme-icon" aria-hidden="true">
                 <svg class="theme-icon theme-icon-sun" viewBox="0 0 24 24" focusable="false">
@@ -265,11 +279,11 @@
                 </svg>
               </span>
               <span class="sidebar-theme-copy">
-                <strong>Appearance</strong>
-                <small>Switch between dark and light mode.</small>
+                <strong data-i18n="prefs.appearance">Apariencia</strong>
+                <small data-i18n="prefs.themeDesc">Cambiar entre modo oscuro y claro.</small>
               </span>
             </span>
-            <span class="mobile-theme-state" data-theme-state>Dark</span>
+            <span class="mobile-theme-state" data-theme-state>Oscuro</span>
           </button>
         </section>
       </div>
@@ -278,50 +292,50 @@
     <section id="system-status" class="system-status-view" hidden>
       <div class="system-hero">
         <div>
-          <p class="eyebrow">System Status</p>
-          <h3>Operations overview</h3>
-          <p>Automatic update health, corpus coverage, and source distribution.</p>
+          <p class="eyebrow" data-i18n="system.status">Estado del sistema</p>
+          <h3 data-i18n="system.operations">Resumen operativo</h3>
+          <p data-i18n="system.description">Salud de actualización automática, cobertura del corpus y distribución de fuentes.</p>
         </div>
-        <div id="system-health-badge" class="system-health-badge">Checking...</div>
+        <div id="system-health-badge" class="system-health-badge">Comprobando...</div>
       </div>
 
       <section class="panel">
         <div class="section-title">
-          <p class="eyebrow">Health</p>
-          <h3>Automatic updates</h3>
+          <p class="eyebrow" data-i18n="system.health">Salud</p>
+          <h3 data-i18n="system.updates">Actualizaciones automáticas</h3>
         </div>
         <div id="system-health" class="system-health-grid"></div>
       </section>
 
       <section class="panel">
         <div class="section-title">
-          <p class="eyebrow">Metrics</p>
-          <h3>Corpus summary</h3>
+          <p class="eyebrow" data-i18n="system.metrics">Métricas</p>
+          <h3 data-i18n="system.corpus">Resumen del corpus</h3>
         </div>
         <div id="system-metrics" class="stats"></div>
       </section>
 
       <section class="panel">
         <div class="section-title">
-          <p class="eyebrow">Sources</p>
-          <h3>Source breakdown</h3>
+          <p class="eyebrow" data-i18n="system.sources">Fuentes</p>
+          <h3 data-i18n="system.sourceBreakdown">Distribución por fuente</h3>
         </div>
         <div id="source-breakdown" class="source-breakdown"></div>
       </section>
     </section>
   </main>
 
-  <nav class="mobile-tabbar" aria-label="Mobile navigation">
-    <button type="button" class="mobile-tab active" data-view-target="today" aria-label="Updates">
+  <nav class="mobile-tabbar" aria-label="Navegación móvil" data-i18n-aria-label="mobile.navigation">
+    <button type="button" class="mobile-tab active" data-view-target="today" aria-label="Actualizaciones" data-i18n-aria-label="mobile.updates">
       <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
         <path d="M20 12a8 8 0 0 1-13.7 5.65"></path>
         <path d="M4 12A8 8 0 0 1 17.7 6.35"></path>
         <path d="M17.7 3.8v2.55h-2.55"></path>
         <path d="M6.3 20.2v-2.55h2.55"></path>
       </svg>
-      <span>Updates</span>
+      <span data-i18n="mobile.updates">Actualizaciones</span>
     </button>
-    <button type="button" class="mobile-tab" data-view-target="briefs" aria-label="Briefs">
+    <button type="button" class="mobile-tab" data-view-target="briefs" aria-label="Briefs" data-i18n-aria-label="mobile.briefs">
       <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
         <path d="M7 3.5h7l3 3v14H7z"></path>
         <path d="M14 3.5v3h3"></path>
@@ -330,30 +344,30 @@
         <path d="M9.5 15.25l1 1 2-2"></path>
         <path d="M14.25 15.5h1.75"></path>
       </svg>
-      <span>Briefs</span>
+      <span data-i18n="mobile.briefs">Briefs</span>
     </button>
-    <button type="button" class="mobile-tab" data-view-target="favorites" aria-label="Favorites">
+    <button type="button" class="mobile-tab" data-view-target="favorites" aria-label="Guardados" data-i18n-aria-label="mobile.saved">
       <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
         <path d="M12 20.2 10.65 19C5.85 14.65 3 12.05 3 8.85 3 6.25 5.05 4.2 7.65 4.2c1.45 0 2.85.68 3.75 1.75h1.2c.9-1.07 2.3-1.75 3.75-1.75 2.6 0 4.65 2.05 4.65 4.65 0 3.2-2.85 5.8-7.65 10.15z"></path>
       </svg>
-      <span>Saved</span>
+      <span data-i18n="mobile.saved">Guardados</span>
     </button>
-    <button type="button" class="mobile-tab" data-view-target="more" aria-label="More">
+    <button type="button" class="mobile-tab" data-view-target="more" aria-label="Más" data-i18n-aria-label="mobile.more">
       <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
         <path d="M5 5h5v5H5z"></path>
         <path d="M14 5h5v5h-5z"></path>
         <path d="M5 14h5v5H5z"></path>
         <path d="M14 14h5v5h-5z"></path>
       </svg>
-      <span>More</span>
+      <span data-i18n="mobile.more">Más</span>
     </button>
   </nav>
 
-  <div id="media-modal" class="media-modal" hidden role="dialog" aria-modal="true" aria-label="Image preview">
-    <button id="media-modal-close" class="media-modal-close" type="button" aria-label="Close image preview">x</button>
+  <div id="media-modal" class="media-modal" hidden role="dialog" aria-modal="true" aria-label="Vista previa de imagen" data-i18n-aria-label="media.preview">
+    <button id="media-modal-close" class="media-modal-close" type="button" aria-label="Cerrar vista previa" data-i18n-aria-label="media.close">x</button>
     <img id="media-modal-image" alt="">
   </div>
 
-  <script src="/static/app.js?v=brief-catchup-v1"></script>
+  <script src="/static/app.js?v=lang-v1"></script>
 </body>
 </html>

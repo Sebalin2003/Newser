@@ -17,6 +17,10 @@ class TestSchema(unittest.TestCase):
         columns = {column["name"] for column in inspect(engine).get_columns("macro_resumenes")}
 
         self.assertIn("brief_json", columns)
+        self.assertIn("texto_en", columns)
+        self.assertIn("brief_json_en", columns)
+        self.assertIn("modelo_en", columns)
+        self.assertIn("fecha_generacion_en", columns)
 
     def test_noticias_has_selected_score_columns(self) -> None:
         from sqlalchemy import inspect
@@ -31,6 +35,7 @@ class TestSchema(unittest.TestCase):
         self.assertIn("tags_json", columns)
         self.assertIn("selection_reason", columns)
         self.assertIn("discussion_url", columns)
+        self.assertIn("resumen_ia_en", columns)
 
 
 class TestArticleScoring(unittest.TestCase):
@@ -490,6 +495,45 @@ class TestHybridPayload(unittest.TestCase):
 
         self.assertEqual(persist.call_args.kwargs["fecha"], date(2026, 6, 18))
 
+    def test_macro_summary_prompt_uses_selected_language(self) -> None:
+        import src.processor as processor
+
+        captured_prompts: list[str] = []
+        article = type("Article", (), {
+            "titulo": "Important IT story",
+            "fuente": "Reuters",
+            "url": "https://www.reuters.com/example",
+            "resumen_ia": "Resumen no disponible",
+            "descripcion_original": "A real story exists.",
+            "area_matcheada": "cybersecurity",
+            "selected_score": 90,
+            "score": 90,
+            "ranking": None,
+            "fecha_ingesta": None,
+            "tags_json": "[]",
+            "selection_reason": "",
+            "score_version": processor.SCORE_VERSION,
+        })()
+
+        def fake_llamar(prompt, *_args, **_kwargs):
+            captured_prompts.append(prompt)
+            return '{"intro":"ok","items":[],"trend_reading":"ok"}'
+
+        with patch.object(processor, "fetch_global_news", return_value=[]), \
+             patch.object(processor, "_llamar_gemini", side_effect=fake_llamar), \
+             patch.object(processor, "_persistir_macro_resumen") as persist, \
+             patch.object(processor, "get_session") as get_session:
+            session = get_session.return_value.__enter__.return_value
+            query = session.query.return_value
+            query.filter.return_value.first.return_value = None
+            query.filter.return_value.order_by.return_value.limit.return_value.all.return_value = [article, article, article]
+
+            processor.generar_macro_resumen_dia({}, language="en")
+
+        self.assertIn("executive brief in English", captured_prompts[0])
+        self.assertIn("Use natural English", captured_prompts[0])
+        self.assertEqual(persist.call_args.kwargs["language"], "en")
+
     def test_processing_skips_individual_enrichment_when_gemini_check_fails(self) -> None:
         import src.processor as processor
 
@@ -604,6 +648,16 @@ class TestHybridPayload(unittest.TestCase):
         self.assertNotIn("sentimiento", prompt.lower())
         self.assertNotIn("positivo", prompt.lower())
         self.assertNotIn("negativo", prompt.lower())
+
+    def test_article_summary_prompt_uses_selected_language(self) -> None:
+        import src.processor as processor
+
+        spanish = processor.build_article_summary_prompt("Example title", "es")
+        english = processor.build_article_summary_prompt("Example title", "en")
+
+        self.assertIn("español", spanish)
+        self.assertIn("English", english)
+        self.assertIn("Headline", english)
 
     def test_interactive_gemini_uses_fast_generation_config(self) -> None:
         import src.processor as processor

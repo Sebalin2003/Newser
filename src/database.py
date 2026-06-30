@@ -86,6 +86,7 @@ class Noticia(Base):
     fecha_publicacion: datetime = Column(DateTime, nullable=True)
     descripcion_original: str = Column(Text, nullable=True)
     resumen_ia: str = Column(Text, nullable=True, default="Resumen no disponible")
+    resumen_ia_en: str = Column(Text, nullable=True)
     area_matcheada: str = Column(String(128), nullable=True)
     fecha_ingesta: datetime = Column(DateTime, nullable=False, default=datetime.utcnow)
     # v2.0 — nullable para compatibilidad con datos existentes
@@ -208,6 +209,10 @@ class MacroResumen(Base):
     modelo: str = Column(String(64), nullable=True)
     brief_json: str = Column(Text, nullable=True)
     fecha_generacion: datetime = Column(DateTime, nullable=False, default=datetime.utcnow)
+    texto_en: str = Column(Text, nullable=True)
+    brief_json_en: str = Column(Text, nullable=True)
+    modelo_en: str = Column(String(64), nullable=True)
+    fecha_generacion_en: datetime = Column(DateTime, nullable=True)
 
     def __repr__(self) -> str:
         return f"<MacroResumen fecha={self.fecha} n_noticias={self.n_noticias}>"
@@ -298,6 +303,7 @@ def migrar_schema() -> None:
             "media_url": "ALTER TABLE noticias ADD COLUMN media_url TEXT",
             "media_type": "ALTER TABLE noticias ADD COLUMN media_type VARCHAR(16)",
             "media_source_url": "ALTER TABLE noticias ADD COLUMN media_source_url TEXT",
+            "resumen_ia_en": "ALTER TABLE noticias ADD COLUMN resumen_ia_en TEXT",
         }
 
         with engine.begin() as conn:
@@ -329,6 +335,10 @@ def migrar_schema() -> None:
 
         nuevas_columnas_mr = {
             "brief_json": "ALTER TABLE macro_resumenes ADD COLUMN brief_json TEXT",
+            "texto_en": "ALTER TABLE macro_resumenes ADD COLUMN texto_en TEXT",
+            "brief_json_en": "ALTER TABLE macro_resumenes ADD COLUMN brief_json_en TEXT",
+            "modelo_en": "ALTER TABLE macro_resumenes ADD COLUMN modelo_en VARCHAR(64)",
+            "fecha_generacion_en": "ALTER TABLE macro_resumenes ADD COLUMN fecha_generacion_en DATETIME",
         }
         with engine.begin() as conn:
             for col_name, ddl in nuevas_columnas_mr.items():

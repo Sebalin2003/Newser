@@ -2,12 +2,311 @@ const state = {
   query: "",
   loading: false,
   view: "today",
+  language: window.localStorage.getItem("newser.language") === "en" ? "en" : "es",
+};
+
+const I18N = {
+  es: {
+    "brand.tagline": "Analizador de tendencias IT",
+    "sidebar.collapse": "Contraer barra lateral",
+    "sidebar.expand": "Expandir barra lateral",
+    "nav.main": "Navegación principal",
+    "nav.workspace": "Espacio de trabajo",
+    "nav.modes": "3 modos",
+    "nav.today": "Actualizaciones de hoy",
+    "nav.todayShort": "Actualizaciones",
+    "nav.todayDesc": "Artículos, repositorios, temas y búsqueda en vivo.",
+    "nav.briefs": "Briefs diarios",
+    "nav.briefsDesc": "Resumen ejecutivo de hoy y últimos 7 días.",
+    "nav.favorites": "Favoritos",
+    "nav.favoritesDesc": "Artículos y repositorios guardados.",
+    "nav.system": "Estado del sistema",
+    "nav.more": "Más",
+    "filters.title": "Controles del feed",
+    "filters.date": "Fecha",
+    "filters.today": "Hoy",
+    "filters.allDates": "Todas las fechas",
+    "filters.allSources": "Todas las fuentes",
+    "filters.allAreas": "Todas las áreas",
+    "filters.selectAll": "Seleccionar todo",
+    "filters.order": "Orden",
+    "filters.score": "Puntaje",
+    "filters.recent": "Más reciente",
+    "filters.sources": "fuentes",
+    "filters.areas": "áreas",
+    "prefs.title": "Preferencias",
+    "prefs.language": "Idioma",
+    "prefs.appearance": "Apariencia",
+    "prefs.switchTheme": "Cambiar tema",
+    "prefs.themeDesc": "Cambiar entre modo oscuro y claro.",
+    "theme.toLight": "Cambiar a modo claro",
+    "theme.toDark": "Cambiar a modo oscuro",
+    "theme.light": "Claro",
+    "theme.dark": "Oscuro",
+    "mobile.openFilters": "Abrir filtros y ajustes",
+    "mobile.navigation": "Navegación móvil",
+    "mobile.updates": "Actualizaciones",
+    "mobile.briefs": "Briefs",
+    "mobile.saved": "Guardados",
+    "mobile.more": "Más",
+    "mobile.content": "Contenido",
+    "search.placeholder": "Buscar en el corpus",
+    "search.clear": "Limpiar búsqueda",
+    "search.results": "Resultados de búsqueda",
+    "status.loadingSearch": "Cargando resultados de búsqueda...",
+    "status.loadingDashboard": "Cargando panel...",
+    "status.loadingBriefs": "Cargando briefs diarios...",
+    "status.loadingFavorites": "Cargando favoritos...",
+    "status.loadingSystem": "Cargando estado del sistema...",
+    "status.generatingSummary": "Generando resumen...",
+    "status.summaryCached": "El resumen ya existe.",
+    "status.summaryGenerated": "Resumen generado.",
+    "error.requestFailed": "La solicitud falló.",
+    "date.today": "Hoy",
+    "date.all": "Todas las fechas",
+    "brief.executive": "Resumen ejecutivo",
+    "brief.loading": "Cargando brief...",
+    "brief.archive": "Archivo",
+    "brief.previous": "Briefs diarios anteriores",
+    "brief.subtitle": "Todas las mañanas a las 8",
+    "brief.generating": "El brief de hoy se está generando. Actualizá esta sección en un momento.",
+    "brief.missing": "Todavía no hay brief diario disponible para esta fecha.",
+    "brief.noPreviousTitle": "No se encontraron briefs diarios anteriores",
+    "brief.noPreviousBody": "Newser solo muestra aquí briefs guardados de los últimos 7 días. Los días faltantes se omiten.",
+    "brief.why": "Por qué importa:",
+    "brief.trend": "Lectura de tendencias",
+    "brief.articles": "artículos",
+    "topics.hot": "Temas activos",
+    "topics.empty": "Todavía no hay temas multi-fuente para esta fecha.",
+    "topics.sourceSingular": "fuente",
+    "topics.sourcePlural": "fuentes",
+    "topics.items": "items",
+    "topics.theme": "Tema",
+    "topics.related": "Items relacionados",
+    "topics.sources": "Fuentes",
+    "topics.supporting": "Artículos de soporte",
+    "topics.noSupporting": "No hay artículos de soporte disponibles.",
+    "feed.trends": "Tendencias",
+    "feed.publications": "publicaciones",
+    "feed.empty": "Ninguna publicación coincide con los filtros activos.",
+    "article.untitled": "Sin título",
+    "article.media": "Media del artículo",
+    "article.openImage": "Abrir vista previa de imagen",
+    "article.openVideo": "Abrir fuente del video",
+    "article.preview": "Vista previa de imagen del artículo",
+    "article.generate": "Generar resumen",
+    "article.addFavorite": "Agregar a favoritos",
+    "article.removeFavorite": "Quitar de favoritos",
+    "article.starsToday": "estrellas hoy",
+    "article.points": "puntos",
+    "article.comments": "comentarios",
+    "article.ranking": "Ranking",
+    "article.trending": "Tendencia",
+    "article.readOriginal": "Leer original",
+    "favorites.emptyTitle": "Todavía no hay favoritos",
+    "favorites.emptyBody": "Usá el botón de corazón en cualquier artículo para guardarlo acá.",
+    "favorites.loadError": "No se pudieron cargar los favoritos:",
+    "system.status": "Estado del sistema",
+    "system.open": "Abrir estado del sistema",
+    "system.openDesc": "Salud, métricas y cobertura de fuentes.",
+    "system.mobileDesc": "Salud de actualización, métricas y fuentes.",
+    "system.operations": "Resumen operativo",
+    "system.description": "Salud de actualización automática, cobertura del corpus y distribución de fuentes.",
+    "system.checking": "Comprobando...",
+    "system.health": "Salud",
+    "system.updates": "Actualizaciones automáticas",
+    "system.metrics": "Métricas",
+    "system.corpus": "Resumen del corpus",
+    "system.sources": "Fuentes",
+    "system.sourceBreakdown": "Distribución por fuente",
+    "system.updating": "Actualizando",
+    "system.needsAttention": "Requiere atención",
+    "system.stale": "Desactualizado",
+    "system.healthy": "Saludable",
+    "system.updateState": "Estado de actualización",
+    "system.updatingSources": "Actualizando fuentes",
+    "system.idle": "En espera",
+    "system.freshness": "Frescura",
+    "system.fresh": "Reciente",
+    "system.lastUpdate": "Última actualización",
+    "system.noUpdate": "Sin actualizaciones todavía",
+    "system.nextCheck": "Próxima comprobación",
+    "system.notScheduled": "No programada",
+    "system.interval": "Intervalo",
+    "system.minutes": "minutos",
+    "system.lastError": "Último error",
+    "system.none": "Ninguno",
+    "system.noSources": "Todavía no hay datos de fuentes disponibles.",
+    "system.items": "items",
+    "system.unavailable": "No disponible",
+    "system.loadError": "No se pudo cargar el estado del sistema:",
+    "source.fallback": "Fuente",
+    "stats.corpus": "Corpus",
+    "stats.last24h": "Últimas 24h",
+    "stats.aiCoverage": "Cobertura IA",
+    "stats.globalItems": "Items globales",
+    "media.preview": "Vista previa de imagen",
+    "media.close": "Cerrar vista previa",
+    "area.ai_agents": "IA y agentes",
+    "area.developer_tools": "Herramientas dev",
+    "area.cybersecurity": "Ciberseguridad",
+    "area.infrastructure_cloud": "Infraestructura y cloud",
+    "area.chips_hardware": "Chips y hardware",
+  },
+  en: {
+    "brand.tagline": "IT News Trend Analyzer",
+    "sidebar.collapse": "Collapse sidebar",
+    "sidebar.expand": "Expand sidebar",
+    "nav.main": "Main navigation",
+    "nav.workspace": "Workspace",
+    "nav.modes": "3 modes",
+    "nav.today": "Today's Updates",
+    "nav.todayShort": "Updates",
+    "nav.todayDesc": "Live articles, repositories, topics, and search.",
+    "nav.briefs": "Daily Briefs",
+    "nav.briefsDesc": "Today's executive summary and previous 7 days.",
+    "nav.favorites": "Favorites",
+    "nav.favoritesDesc": "Saved articles and repositories.",
+    "nav.system": "System Status",
+    "nav.more": "More",
+    "filters.title": "Feed controls",
+    "filters.date": "Date",
+    "filters.today": "Today",
+    "filters.allDates": "All dates",
+    "filters.allSources": "All sources",
+    "filters.allAreas": "All areas",
+    "filters.selectAll": "Select all",
+    "filters.order": "Order",
+    "filters.score": "Score",
+    "filters.recent": "Most recent",
+    "filters.sources": "sources",
+    "filters.areas": "areas",
+    "prefs.title": "Preferences",
+    "prefs.language": "Language",
+    "prefs.appearance": "Appearance",
+    "prefs.switchTheme": "Switch theme",
+    "prefs.themeDesc": "Switch between dark and light mode.",
+    "theme.toLight": "Switch to light mode",
+    "theme.toDark": "Switch to dark mode",
+    "theme.light": "Light",
+    "theme.dark": "Dark",
+    "mobile.openFilters": "Open filters and settings",
+    "mobile.navigation": "Mobile navigation",
+    "mobile.updates": "Updates",
+    "mobile.briefs": "Briefs",
+    "mobile.saved": "Saved",
+    "mobile.more": "More",
+    "mobile.content": "Content",
+    "search.placeholder": "Search corpus",
+    "search.clear": "Clear search",
+    "search.results": "Search results",
+    "status.loadingSearch": "Loading search results...",
+    "status.loadingDashboard": "Loading dashboard...",
+    "status.loadingBriefs": "Loading daily briefs...",
+    "status.loadingFavorites": "Loading favorites...",
+    "status.loadingSystem": "Loading system status...",
+    "status.generatingSummary": "Generating summary...",
+    "status.summaryCached": "Summary already exists.",
+    "status.summaryGenerated": "Summary generated.",
+    "error.requestFailed": "Request failed.",
+    "date.today": "Today",
+    "date.all": "All dates",
+    "brief.executive": "Executive summary",
+    "brief.loading": "Loading brief...",
+    "brief.archive": "Archive",
+    "brief.previous": "Previous daily briefs",
+    "brief.subtitle": "Every morning at 8 o'clock",
+    "brief.generating": "Today's brief is being generated. Refresh this section in a moment.",
+    "brief.missing": "No daily brief is available for this date yet.",
+    "brief.noPreviousTitle": "No previous daily briefs found",
+    "brief.noPreviousBody": "Newser only shows stored briefs from the previous 7 days here. Missing days are omitted.",
+    "brief.why": "Why it matters:",
+    "brief.trend": "Trend reading",
+    "brief.articles": "articles",
+    "topics.hot": "Hot topics",
+    "topics.empty": "No multi-source hot topics for this date yet.",
+    "topics.sourceSingular": "source",
+    "topics.sourcePlural": "sources",
+    "topics.items": "items",
+    "topics.theme": "Theme",
+    "topics.related": "Related items",
+    "topics.sources": "Sources",
+    "topics.supporting": "Supporting articles",
+    "topics.noSupporting": "No supporting articles available.",
+    "feed.trends": "Trends",
+    "feed.publications": "publications",
+    "feed.empty": "No publications match the active filters.",
+    "article.untitled": "Untitled",
+    "article.media": "Article media",
+    "article.openImage": "Open image preview",
+    "article.openVideo": "Open video source",
+    "article.preview": "Article image preview",
+    "article.generate": "Generate summary",
+    "article.addFavorite": "Add to favorites",
+    "article.removeFavorite": "Remove from favorites",
+    "article.starsToday": "stars today",
+    "article.points": "points",
+    "article.comments": "comments",
+    "article.ranking": "Ranking",
+    "article.trending": "Trending",
+    "article.readOriginal": "Read original",
+    "favorites.emptyTitle": "No favorites yet",
+    "favorites.emptyBody": "Use the heart button on any article to save it here for follow-up.",
+    "favorites.loadError": "Favorites could not be loaded:",
+    "system.status": "System Status",
+    "system.open": "Open System Status",
+    "system.openDesc": "Health, metrics, and source coverage.",
+    "system.mobileDesc": "Update health, metrics, and sources.",
+    "system.operations": "Operations overview",
+    "system.description": "Automatic update health, corpus coverage, and source distribution.",
+    "system.checking": "Checking...",
+    "system.health": "Health",
+    "system.updates": "Automatic updates",
+    "system.metrics": "Metrics",
+    "system.corpus": "Corpus summary",
+    "system.sources": "Sources",
+    "system.sourceBreakdown": "Source breakdown",
+    "system.updating": "Updating",
+    "system.needsAttention": "Needs attention",
+    "system.stale": "Stale",
+    "system.healthy": "Healthy",
+    "system.updateState": "Update state",
+    "system.updatingSources": "Updating sources",
+    "system.idle": "Idle",
+    "system.freshness": "Freshness",
+    "system.fresh": "Fresh",
+    "system.lastUpdate": "Last update",
+    "system.noUpdate": "No update yet",
+    "system.nextCheck": "Next check",
+    "system.notScheduled": "Not scheduled",
+    "system.interval": "Interval",
+    "system.minutes": "minutes",
+    "system.lastError": "Last error",
+    "system.none": "None",
+    "system.noSources": "No source data is available yet.",
+    "system.items": "items",
+    "system.unavailable": "Unavailable",
+    "system.loadError": "System status could not be loaded:",
+    "source.fallback": "Source",
+    "stats.corpus": "Corpus",
+    "stats.last24h": "Last 24h",
+    "stats.aiCoverage": "AI coverage",
+    "stats.globalItems": "Global items",
+    "media.preview": "Image preview",
+    "media.close": "Close image preview",
+    "area.ai_agents": "AI & Agents",
+    "area.developer_tools": "Developer Tools",
+    "area.cybersecurity": "Cybersecurity",
+    "area.infrastructure_cloud": "Infrastructure & Cloud",
+    "area.chips_hardware": "Chips & Hardware",
+  },
 };
 
 const filters = document.querySelector("#filters");
 const sidebarToggle = document.querySelector("#sidebar-toggle");
 const themeToggles = document.querySelectorAll("#desktop-theme-toggle, [data-mobile-theme-action]");
 const themeStateLabels = document.querySelectorAll("[data-theme-state]");
+const languageButtons = document.querySelectorAll("[data-language-option]");
 const mobileMenuToggle = document.querySelector("#mobile-menu-toggle");
 const mobileDrawerBackdrop = document.querySelector("#mobile-drawer-backdrop");
 const mobileViewLabel = document.querySelector("#mobile-view-label");
@@ -43,6 +342,55 @@ const mediaModal = document.querySelector("#media-modal");
 const mediaModalImage = document.querySelector("#media-modal-image");
 const mediaModalClose = document.querySelector("#media-modal-close");
 
+function i18n(key) {
+  return I18N[state.language]?.[key] || I18N.es[key] || key;
+}
+
+function locale() {
+  return state.language === "en" ? "en-US" : "es-AR";
+}
+
+function withLanguage(url) {
+  const separator = url.includes("?") ? "&" : "?";
+  return `${url}${separator}lang=${encodeURIComponent(state.language)}`;
+}
+
+function applyTranslations() {
+  document.documentElement.lang = state.language;
+  document.querySelectorAll("[data-i18n]").forEach((node) => {
+    node.textContent = i18n(node.dataset.i18n);
+  });
+  document.querySelectorAll("[data-i18n-aria-label]").forEach((node) => {
+    node.setAttribute("aria-label", i18n(node.dataset.i18nAriaLabel));
+  });
+  document.querySelectorAll("[data-i18n-title]").forEach((node) => {
+    node.setAttribute("title", i18n(node.dataset.i18nTitle));
+  });
+  document.querySelectorAll("[data-i18n-placeholder]").forEach((node) => {
+    node.setAttribute("placeholder", i18n(node.dataset.i18nPlaceholder));
+  });
+  document.querySelectorAll("[data-area-label]").forEach((node) => {
+    node.textContent = i18n(`area.${node.dataset.areaLabel}`);
+  });
+  languageButtons.forEach((button) => {
+    const active = button.dataset.languageOption === state.language;
+    button.setAttribute("aria-pressed", String(active));
+  });
+  setTheme(document.documentElement.dataset.theme === "light" ? "light" : "dark");
+  syncDateMode();
+  updateMultiSelectLabels();
+  updateTopbarTitle();
+}
+
+function setLanguage(language) {
+  const nextLanguage = language === "en" ? "en" : "es";
+  if (state.language === nextLanguage) return;
+  state.language = nextLanguage;
+  window.localStorage.setItem("newser.language", nextLanguage);
+  applyTranslations();
+  loadAll();
+}
+
 function setStatus(message, isError = false) {
   statusLine.textContent = message || "";
   statusLine.classList.toggle("error", isError);
@@ -59,6 +407,7 @@ function formParams() {
     params.set("fecha", fecha);
   }
   params.set("orden", orden);
+  params.set("lang", state.language);
   for (const source of data.getAll("fuentes")) params.append("fuentes", source);
   for (const area of data.getAll("areas")) params.append("areas", area);
   if (state.query) params.set("q", state.query);
@@ -102,7 +451,7 @@ function formatDate(value) {
   if (!value) return "";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "";
-  return date.toLocaleString([], {
+  return date.toLocaleString(locale(), {
     year: "numeric",
     month: "short",
     day: "2-digit",
@@ -116,7 +465,7 @@ function formatFeedDate(value) {
   const parts = value.split("-").map((part) => Number.parseInt(part, 10));
   if (parts.length !== 3 || parts.some(Number.isNaN)) return "";
   const date = new Date(parts[0], parts[1] - 1, parts[2]);
-  return date.toLocaleDateString([], {
+  return date.toLocaleDateString(locale(), {
     year: "numeric",
     month: "short",
     day: "numeric",
@@ -129,14 +478,14 @@ function updateTopbarTitle() {
   const systemActive = state.view === "system";
   const moreActive = state.view === "more";
   const title = briefsActive
-    ? "Daily Briefs"
+    ? i18n("nav.briefs")
     : favoritesActive
-      ? "Favorites"
+      ? i18n("nav.favorites")
       : systemActive
-        ? "System Status"
+        ? i18n("nav.system")
         : moreActive
-          ? "More"
-          : "Today\u2019s Updates";
+          ? i18n("nav.more")
+          : i18n("nav.today");
 
   if (topbarTitleMain) {
     topbarTitleMain.textContent = title;
@@ -147,7 +496,7 @@ function updateTopbarTitle() {
   if (!topbarDate) return;
   if (topbarSubtitle) {
     topbarSubtitle.hidden = !briefsActive;
-    topbarSubtitle.textContent = briefsActive ? "Every morning at 8 o'clock" : "";
+    topbarSubtitle.textContent = briefsActive ? i18n("brief.subtitle") : "";
   }
   const dateInput = filters.querySelector('input[name="fecha"]');
   const allDates = Boolean(allDatesToggle?.checked);
@@ -155,9 +504,9 @@ function updateTopbarTitle() {
   const latestDate = dateInput?.max || "";
   const showDate = state.view === "today" && (allDates || (selectedDate && latestDate && selectedDate !== latestDate));
   topbarDate.hidden = !showDate;
-  topbarDate.textContent = allDates ? "All dates" : (showDate ? formatFeedDate(selectedDate) : "");
+  topbarDate.textContent = allDates ? i18n("date.all") : (showDate ? formatFeedDate(selectedDate) : "");
   if (mobileViewLabel) {
-    mobileViewLabel.textContent = allDates ? "All dates" : (showDate ? formatFeedDate(selectedDate) : title.replace("Today\u2019s ", ""));
+    mobileViewLabel.textContent = allDates ? i18n("date.all") : (showDate ? formatFeedDate(selectedDate) : (state.view === "today" ? i18n("nav.todayShort") : title));
   }
 }
 
@@ -165,7 +514,7 @@ function syncDateMode() {
   const dateInput = filters.querySelector('input[name="fecha"]');
   const allDates = Boolean(allDatesToggle?.checked);
   if (dateInput) dateInput.disabled = allDates;
-  if (dateModeLabel) dateModeLabel.textContent = allDates ? "All dates" : "Today";
+  if (dateModeLabel) dateModeLabel.textContent = allDates ? i18n("date.all") : i18n("date.today");
   updateTopbarTitle();
 }
 
@@ -178,7 +527,7 @@ async function fetchJson(url, options = {}) {
   const response = await fetch(url, options);
   const data = await response.json();
   if (!response.ok) {
-    throw new Error(data.reason || data.detail || "Request failed.");
+    throw new Error(data.reason || data.detail || i18n("error.requestFailed"));
   }
   return data;
 }
@@ -206,7 +555,7 @@ async function loadAll() {
   document.body.classList.add("is-loading");
   const searchActive = Boolean(state.query);
   setSearchMode(searchActive);
-  setStatus(searchActive ? "Loading search results..." : "Loading dashboard...");
+  setStatus(searchActive ? i18n("status.loadingSearch") : i18n("status.loadingDashboard"));
   try {
     const params = formParams();
     const feedData = await fetchJson(`/api/feed?${params}`);
@@ -228,11 +577,11 @@ async function loadDailyBriefs() {
   state.loading = true;
   document.body.classList.add("is-loading");
   setViewMode("briefs");
-  setStatus("Loading daily briefs...");
+  setStatus(i18n("status.loadingBriefs"));
   try {
     const [briefData, archiveData] = await Promise.all([
-      fetchJson("/api/brief"),
-      fetchJson("/api/daily-briefs"),
+      fetchJson(withLanguage("/api/brief")),
+      fetchJson(withLanguage("/api/daily-briefs")),
     ]);
     renderBrief(briefData);
     renderDailyBriefs(archiveData.items || []);
@@ -250,13 +599,13 @@ async function loadFavorites() {
   state.loading = true;
   document.body.classList.add("is-loading");
   setViewMode("favorites");
-  setStatus("Loading favorites...");
+  setStatus(i18n("status.loadingFavorites"));
   try {
-    const data = await fetchJson("/api/favorites");
+    const data = await fetchJson(withLanguage("/api/favorites"));
     renderFavorites(data);
     setStatus("");
   } catch (error) {
-    favoritesFeed.innerHTML = `<div class="empty panel">Favorites could not be loaded: ${escapeHtml(error.message)}</div>`;
+    favoritesFeed.innerHTML = `<div class="empty panel">${i18n("favorites.loadError")} ${escapeHtml(error.message)}</div>`;
     setStatus(error.message, true);
   } finally {
     state.loading = false;
@@ -269,11 +618,11 @@ async function loadSystemStatus() {
   state.loading = true;
   document.body.classList.add("is-loading");
   setViewMode("system");
-  setStatus("Loading system status...");
+  setStatus(i18n("status.loadingSystem"));
   try {
     const [statsData, refreshData] = await Promise.all([
-      fetchJson("/api/stats"),
-      fetchJson("/api/refresh-status"),
+      fetchJson(withLanguage("/api/stats")),
+      fetchJson(withLanguage("/api/refresh-status")),
     ]);
     renderSystemStatus(statsData, refreshData);
     setStatus("");
@@ -328,7 +677,7 @@ function setSearchMode(active) {
 function setSidebarCollapsed(collapsed) {
   document.body.classList.toggle("sidebar-collapsed", collapsed);
   sidebarToggle.setAttribute("aria-expanded", String(!collapsed));
-  sidebarToggle.setAttribute("aria-label", collapsed ? "Expand sidebar" : "Collapse sidebar");
+  sidebarToggle.setAttribute("aria-label", collapsed ? i18n("sidebar.expand") : i18n("sidebar.collapse"));
 }
 
 function setTheme(theme) {
@@ -338,11 +687,11 @@ function setTheme(theme) {
   const isLight = selectedTheme === "light";
   themeToggles.forEach((button) => {
     button.setAttribute("aria-pressed", String(isLight));
-    button.setAttribute("aria-label", isLight ? "Switch to dark mode" : "Switch to light mode");
-    button.setAttribute("title", isLight ? "Switch to dark mode" : "Switch to light mode");
+    button.setAttribute("aria-label", isLight ? i18n("theme.toDark") : i18n("theme.toLight"));
+    button.setAttribute("title", isLight ? i18n("theme.toDark") : i18n("theme.toLight"));
   });
   themeStateLabels.forEach((label) => {
-    label.textContent = isLight ? "Light" : "Dark";
+    label.textContent = isLight ? i18n("theme.light") : i18n("theme.dark");
   });
 }
 
@@ -353,6 +702,13 @@ function initTheme() {
     const currentTheme = document.documentElement.dataset.theme === "light" ? "light" : "dark";
     setTheme(currentTheme === "light" ? "dark" : "light");
   }));
+}
+
+function initLanguage() {
+  applyTranslations();
+  languageButtons.forEach((button) => {
+    button.addEventListener("click", () => setLanguage(button.dataset.languageOption || "es"));
+  });
 }
 
 function isPhoneViewport() {
@@ -407,10 +763,10 @@ function initSidebar() {
 
 function renderStats(data) {
   return [
-    ["Corpus", data.total_corpus],
-    ["Last 24h", data.noticias_24h],
-    ["AI coverage", `${data.ai_coverage_pct}%`],
-    ["Global items", data.global_news_count],
+    [i18n("stats.corpus"), data.total_corpus],
+    [i18n("stats.last24h"), data.noticias_24h],
+    [i18n("stats.aiCoverage"), `${data.ai_coverage_pct}%`],
+    [i18n("stats.globalItems"), data.global_news_count],
   ]
     .map(([label, value]) => `<div class="stat"><strong>${escapeHtml(value)}</strong><span>${escapeHtml(label)}</span></div>`)
     .join("");
@@ -418,23 +774,23 @@ function renderStats(data) {
 
 function renderSystemStatus(statsData, refreshData) {
   const statusLabel = refreshData.updating
-    ? "Updating"
+    ? i18n("system.updating")
     : refreshData.last_error
-      ? "Needs attention"
+      ? i18n("system.needsAttention")
       : refreshData.stale
-        ? "Stale"
-        : "Healthy";
+        ? i18n("system.stale")
+        : i18n("system.healthy");
   systemHealthBadge.textContent = statusLabel;
   systemHealthBadge.classList.toggle("is-warning", Boolean(refreshData.stale || refreshData.last_error));
   systemHealthBadge.classList.toggle("is-updating", Boolean(refreshData.updating));
 
   systemHealth.innerHTML = [
-    ["Update state", refreshData.updating ? "Updating sources" : "Idle"],
-    ["Freshness", refreshData.stale ? "Stale" : "Fresh"],
-    ["Last update", formatDate(refreshData.latest_ingested_at) || "No update yet"],
-    ["Next check", formatDate(refreshData.next_check_at) || "Not scheduled"],
-    ["Interval", `${escapeHtml(refreshData.interval_minutes || 0)} minutes`],
-    ["Last error", refreshData.last_error || "None"],
+    [i18n("system.updateState"), refreshData.updating ? i18n("system.updatingSources") : i18n("system.idle")],
+    [i18n("system.freshness"), refreshData.stale ? i18n("system.stale") : i18n("system.fresh")],
+    [i18n("system.lastUpdate"), formatDate(refreshData.latest_ingested_at) || i18n("system.noUpdate")],
+    [i18n("system.nextCheck"), formatDate(refreshData.next_check_at) || i18n("system.notScheduled")],
+    [i18n("system.interval"), `${escapeHtml(refreshData.interval_minutes || 0)} ${i18n("system.minutes")}`],
+    [i18n("system.lastError"), refreshData.last_error || i18n("system.none")],
   ]
     .map(([label, value]) => `
       <article class="system-health-item">
@@ -451,7 +807,7 @@ function renderSystemStatus(statsData, refreshData) {
 function renderSourceBreakdown(sourceCounts) {
   const entries = Object.entries(sourceCounts).sort((a, b) => Number(b[1]) - Number(a[1]));
   if (!entries.length) {
-    sourceBreakdown.innerHTML = `<div class="empty">No source data is available yet.</div>`;
+    sourceBreakdown.innerHTML = `<div class="empty">${i18n("system.noSources")}</div>`;
     return;
   }
   const max = Math.max(...entries.map(([, count]) => Number(count) || 0), 1);
@@ -462,7 +818,7 @@ function renderSourceBreakdown(sourceCounts) {
         <article class="source-row">
           <div>
             <strong>${escapeHtml(source)}</strong>
-            <span>${escapeHtml(count)} items</span>
+            <span>${escapeHtml(count)} ${i18n("system.items")}</span>
           </div>
           <div class="source-bar" aria-hidden="true"><span style="width: ${pct}%"></span></div>
         </article>
@@ -472,9 +828,9 @@ function renderSourceBreakdown(sourceCounts) {
 }
 
 function renderSystemError(message) {
-  systemHealthBadge.textContent = "Unavailable";
+  systemHealthBadge.textContent = i18n("system.unavailable");
   systemHealthBadge.classList.add("is-warning");
-  systemHealth.innerHTML = `<div class="empty">System status could not be loaded: ${escapeHtml(message)}</div>`;
+  systemHealth.innerHTML = `<div class="empty">${i18n("system.loadError")} ${escapeHtml(message)}</div>`;
   systemMetrics.innerHTML = "";
   sourceBreakdown.innerHTML = "";
 }
@@ -482,8 +838,8 @@ function renderSystemError(message) {
 function renderBrief(data) {
   if (!data.available) {
     const missingMessage = data.catchup_started || data.catchup_running
-      ? "Today’s brief is being generated. Refresh this section in a moment."
-      : "No daily brief is available for this date yet.";
+      ? i18n("brief.generating")
+      : i18n("brief.missing");
     brief.innerHTML = renderCurrentBriefShell(
       `<div class="empty">${escapeHtml(missingMessage)}</div>`,
       "",
@@ -498,19 +854,19 @@ function renderBrief(data) {
     body += json.items
       .map((item, index) => `
         <article class="brief-item">
-          <h4>${index + 1}. ${escapeHtml(item.title || "Untitled")}</h4>
+          <h4>${index + 1}. ${escapeHtml(item.title || i18n("article.untitled"))}</h4>
           <p>${escapeHtml(item.summary || "")}</p>
-          ${item.why_it_matters ? `<p><strong>Why it matters:</strong> ${escapeHtml(item.why_it_matters)}</p>` : ""}
+          ${item.why_it_matters ? `<p><strong>${i18n("brief.why")}</strong> ${escapeHtml(item.why_it_matters)}</p>` : ""}
         </article>
       `)
       .join("");
     if (json.trend_reading) {
-      body += `<article class="brief-item"><h4>Trend reading</h4><p>${escapeHtml(json.trend_reading)}</p></article>`;
+      body += `<article class="brief-item"><h4>${i18n("brief.trend")}</h4><p>${escapeHtml(json.trend_reading)}</p></article>`;
     }
   } else {
     body = `<p>${escapeHtml(data.texto || "")}</p>`;
   }
-  const meta = `${escapeHtml(data.n_noticias)} articles - ${escapeHtml(data.modelo)} - ${escapeHtml(formatDate(data.fecha_generacion))}`;
+  const meta = `${escapeHtml(data.n_noticias)} ${i18n("brief.articles")} - ${escapeHtml(data.modelo)} - ${escapeHtml(formatDate(data.fecha_generacion))}`;
   brief.innerHTML = renderCurrentBriefShell(body, meta);
   bindCurrentBriefToggle();
 }
@@ -519,8 +875,8 @@ function renderCurrentBriefShell(body, meta) {
   return `
     <button class="daily-brief-toggle current-brief-toggle" type="button" data-current-brief-toggle aria-expanded="true" aria-controls="today-brief-body">
       <span>
-        <small>Today</small>
-        <strong>Executive summary</strong>
+        <small>${i18n("date.today")}</small>
+        <strong>${i18n("brief.executive")}</strong>
         ${meta ? `<small>${meta}</small>` : ""}
       </span>
       <span class="daily-brief-chevron" aria-hidden="true"></span>
@@ -543,14 +899,14 @@ function renderBriefBody(data) {
     body += json.items
       .map((item, index) => `
         <article class="brief-item">
-          <h4>${index + 1}. ${escapeHtml(item.title || "Untitled")}</h4>
+          <h4>${index + 1}. ${escapeHtml(item.title || i18n("article.untitled"))}</h4>
           <p>${escapeHtml(item.summary || "")}</p>
-          ${item.why_it_matters ? `<p><strong>Why it matters:</strong> ${escapeHtml(item.why_it_matters)}</p>` : ""}
+          ${item.why_it_matters ? `<p><strong>${i18n("brief.why")}</strong> ${escapeHtml(item.why_it_matters)}</p>` : ""}
         </article>
       `)
       .join("");
     if (json.trend_reading) {
-      body += `<article class="brief-item"><h4>Trend reading</h4><p>${escapeHtml(json.trend_reading)}</p></article>`;
+      body += `<article class="brief-item"><h4>${i18n("brief.trend")}</h4><p>${escapeHtml(json.trend_reading)}</p></article>`;
     }
     return body;
   }
@@ -561,8 +917,8 @@ function renderDailyBriefs(items) {
   if (!items.length) {
     dailyBriefsList.innerHTML = `
       <div class="empty panel archive-empty">
-        <strong>No previous daily briefs found</strong>
-        <span>Newser only shows stored briefs from the previous 7 days here. Missing days are omitted.</span>
+        <strong>${i18n("brief.noPreviousTitle")}</strong>
+        <span>${i18n("brief.noPreviousBody")}</span>
       </div>
     `;
     return;
@@ -576,7 +932,7 @@ function renderDailyBriefs(items) {
         <button class="daily-brief-toggle" type="button" data-daily-brief-toggle aria-expanded="${expanded}" aria-controls="${detailId}">
           <span>
             <strong>${escapeHtml(item.fecha)}</strong>
-            <small>${escapeHtml(item.n_noticias)} articles - ${escapeHtml(item.modelo)} - ${escapeHtml(formatDate(item.fecha_generacion))}</small>
+            <small>${escapeHtml(item.n_noticias)} ${i18n("brief.articles")} - ${escapeHtml(item.modelo)} - ${escapeHtml(formatDate(item.fecha_generacion))}</small>
           </span>
           <span class="daily-brief-chevron" aria-hidden="true"></span>
         </button>
@@ -603,8 +959,8 @@ function renderFavorites(data) {
   if (!count) {
     favoritesFeed.innerHTML = `
       <div class="empty panel archive-empty">
-        <strong>No favorites yet</strong>
-        <span>Use the heart button on any article to save it here for follow-up.</span>
+        <strong>${i18n("favorites.emptyTitle")}</strong>
+        <span>${i18n("favorites.emptyBody")}</span>
       </div>
     `;
     return;
@@ -615,7 +971,7 @@ function renderFavorites(data) {
 
 function renderHotTopics(items) {
   if (!items.length) {
-    hotTopics.innerHTML = `<div class="empty">No multi-source hot topics for this date yet.</div>`;
+    hotTopics.innerHTML = `<div class="empty">${i18n("topics.empty")}</div>`;
     return;
   }
   hotTopics.innerHTML = items.map(renderTopic).join("");
@@ -627,16 +983,16 @@ function renderHotTopics(items) {
 function renderTopic(topic, index) {
   const titleParts = splitStarTitle(topic.title);
   const detailId = `topic-detail-${index}`;
-  const sourceLabel = Number(topic.source_count) === 1 ? "source" : "sources";
+  const sourceLabel = Number(topic.source_count) === 1 ? i18n("topics.sourceSingular") : i18n("topics.sourcePlural");
   const sources = (topic.sources || [])
     .map((source) => `<span class="topic-source-chip">${escapeHtml(source)}</span>`)
     .join("");
   const supportingItems = (topic.supporting_items || [])
     .map((item) => `
       <a class="topic-support-item" href="${escapeHtml(item.url || "#")}" target="_blank" rel="noopener">
-        <span>${escapeHtml(item.source || "Source")}</span>
-        <strong>${escapeHtml(item.title || "Untitled")}</strong>
-        <em>${escapeHtml(Math.round(Number(item.score || 0)))} score</em>
+        <span>${escapeHtml(item.source || i18n("source.fallback"))}</span>
+        <strong>${escapeHtml(item.title || i18n("article.untitled"))}</strong>
+        <em>${escapeHtml(Math.round(Number(item.score || 0)))} ${i18n("filters.score").toLowerCase()}</em>
       </a>
     `)
     .join("");
@@ -648,27 +1004,27 @@ function renderTopic(topic, index) {
             <strong>${escapeHtml(titleParts.title)}</strong>
             ${titleParts.stars ? `<span class="topic-star-metric">${renderStarCount(titleParts.stars)}</span>` : ""}
           </div>
-          <span>${escapeHtml(topic.topic)} - ${escapeHtml(topic.items)} items</span>
+          <span>${escapeHtml(topic.topic)} - ${escapeHtml(topic.items)} ${i18n("topics.items")}</span>
         </div>
         <span class="topic-source-count">${escapeHtml(topic.source_count)} ${sourceLabel}</span>
       </button>
       <div id="${detailId}" class="topic-detail" hidden>
         <div class="topic-detail-stat">
-          <span>Theme</span>
+          <span>${i18n("topics.theme")}</span>
           <strong>${escapeHtml(topic.topic)}</strong>
         </div>
         <div class="topic-detail-stat">
-          <span>Related items</span>
+          <span>${i18n("topics.related")}</span>
           <strong>${escapeHtml(topic.items)}</strong>
         </div>
         <div class="topic-detail-stat">
-          <span>Sources</span>
+          <span>${i18n("topics.sources")}</span>
           <strong>${escapeHtml(topic.source_count)}</strong>
         </div>
-        <div class="topic-sources" aria-label="Supporting sources">${sources}</div>
+        <div class="topic-sources" aria-label="${i18n("topics.supporting")}">${sources}</div>
         <div class="topic-support-list">
-          <span>Supporting articles</span>
-          ${supportingItems || "<p>No supporting articles available.</p>"}
+          <span>${i18n("topics.supporting")}</span>
+          ${supportingItems || `<p>${i18n("topics.noSupporting")}</p>`}
         </div>
       </div>
     </article>
@@ -685,10 +1041,10 @@ function toggleTopicDetails(button) {
 
 function renderFeed(data) {
   const count = data.count || 0;
-  feedTitle.textContent = state.query ? "Search results" : "Trends";
-  feedMeta.textContent = `${count} publications - ${data.orden}`;
+  feedTitle.textContent = state.query ? i18n("search.results") : i18n("feed.trends");
+  feedMeta.textContent = `${count} ${i18n("feed.publications")} - ${data.orden === "Mas reciente" ? i18n("filters.recent") : i18n("filters.score")}`;
   if (!count) {
-    feed.innerHTML = `<div class="empty panel">No publications match the active filters.</div>`;
+    feed.innerHTML = `<div class="empty panel">${i18n("feed.empty")}</div>`;
     return;
   }
   feed.innerHTML = data.items.map(renderArticle).join("");
@@ -709,21 +1065,21 @@ function bindArticleActions(root) {
 
 function renderMediaPreview(item) {
   if (!item.media_url) return "";
-  const title = item.label || item.titulo || "Article media";
+  const title = item.label || item.titulo || i18n("article.media");
   const mediaUrl = escapeHtml(item.media_url);
   const sourceUrl = escapeHtml(item.media_source_url || item.url || "");
   const safeTitle = escapeHtml(title);
   const image = `<img src="${mediaUrl}" alt="${safeTitle}" loading="lazy" onerror="this.closest('.article-media')?.remove()">`;
   if (item.media_type === "video") {
     return `
-      <a class="article-media article-media-video" href="${sourceUrl}" target="_blank" rel="noreferrer" aria-label="Open video source">
+      <a class="article-media article-media-video" href="${sourceUrl}" target="_blank" rel="noreferrer" aria-label="${i18n("article.openVideo")}">
         ${image}
         <span class="media-play" aria-hidden="true"></span>
       </a>
     `;
   }
   return `
-    <button class="article-media article-media-image" type="button" data-media-image="${mediaUrl}" data-media-title="${safeTitle}" aria-label="Open image preview">
+    <button class="article-media article-media-image" type="button" data-media-image="${mediaUrl}" data-media-title="${safeTitle}" aria-label="${i18n("article.openImage")}">
       ${image}
     </button>
   `;
@@ -736,22 +1092,22 @@ function renderArticle(item) {
   const time = formatDate(item.fuente === "GitHub Trending" ? item.fecha_ingesta : item.fecha_publicacion);
   const tags = (item.tags || []).slice(0, 4).map((tag) => `<span class="tag">${escapeHtml(tag)}</span>`).join("");
   const metric = item.fuente === "GitHub Trending"
-    ? `${Number(item.metric || 0).toLocaleString()} stars today`
+    ? `${Number(item.metric || 0).toLocaleString(locale())} ${i18n("article.starsToday")}`
     : item.fuente === "Hacker News"
-      ? `${Number(item.metric || item.comments || 0).toLocaleString()} points`
+      ? `${Number(item.metric || item.comments || 0).toLocaleString(locale())} ${i18n("article.points")}`
       : "";
   const discussion = item.discussion_url
-    ? `<a href="${escapeHtml(item.discussion_url)}" target="_blank" rel="noreferrer">${escapeHtml(item.comments)} comments</a>`
+    ? `<a href="${escapeHtml(item.discussion_url)}" target="_blank" rel="noreferrer">${escapeHtml(item.comments)} ${i18n("article.comments")}</a>`
     : "";
   const summaryAction = hasSummary(item) || isRepository
     ? ""
     : `
       <button type="button" class="summary-button" data-summary="${escapeHtml(item.id)}">
-        <span class="summary-button-label">Generate summary</span>
+        <span class="summary-button-label">${i18n("article.generate")}</span>
         <span class="summary-spinner" aria-hidden="true"></span>
       </button>
     `;
-  const favoriteLabel = item.is_favorite ? "Remove from favorites" : "Add to favorites";
+  const favoriteLabel = item.is_favorite ? i18n("article.removeFavorite") : i18n("article.addFavorite");
   const favoriteButton = `
     <button
       class="favorite-button${item.is_favorite ? " active" : ""}"
@@ -769,7 +1125,7 @@ function renderArticle(item) {
   const starMetric = titleParts.stars ? `<div class="article-star-metric">${renderStarCount(titleParts.stars)}</div>` : "";
   const mediaPreview = renderMediaPreview(item);
   const visualRail = starMetric || mediaPreview
-    ? `<aside class="article-visual" aria-label="Article visual details">${starMetric}${mediaPreview}</aside>`
+    ? `<aside class="article-visual" aria-label="${i18n("article.media")}">${starMetric}${mediaPreview}</aside>`
     : "";
 
   return `
@@ -794,11 +1150,11 @@ function renderArticle(item) {
         ${visualRail}
       </div>
       <div class="article-foot">
-        <span>${escapeHtml(metric || (item.ranking ? `Ranking #${item.ranking}` : "Trending"))}</span>
+        <span>${escapeHtml(metric || (item.ranking ? `${i18n("article.ranking")} #${item.ranking}` : i18n("article.trending")))}</span>
         <div class="article-actions">
           ${discussion}
           ${summaryAction}
-          ${item.url ? `<a href="${escapeHtml(item.url)}" target="_blank" rel="noreferrer">Read original</a>` : ""}
+          ${item.url ? `<a href="${escapeHtml(item.url)}" target="_blank" rel="noreferrer">${i18n("article.readOriginal")}</a>` : ""}
         </div>
       </div>
     </article>
@@ -811,10 +1167,10 @@ async function generateSummary(articleId, button) {
     button.classList.add("is-generating");
     button.setAttribute("aria-busy", "true");
   }
-  setStatus("Generating summary...");
+  setStatus(i18n("status.generatingSummary"));
   try {
-    const result = await fetchJson(`/api/articles/${encodeURIComponent(articleId)}/summary`, { method: "POST" });
-    setStatus(result.cached ? "Summary already exists." : "Summary generated.");
+    const result = await fetchJson(withLanguage(`/api/articles/${encodeURIComponent(articleId)}/summary`), { method: "POST" });
+    setStatus(result.cached ? i18n("status.summaryCached") : i18n("status.summaryGenerated"));
     if (result.summary) {
       applyGeneratedSummary(articleId, result.summary, button);
     }
@@ -849,7 +1205,7 @@ async function toggleFavorite(articleId, button) {
   const wasFavorite = button.getAttribute("aria-pressed") === "true";
   button.disabled = true;
   try {
-    const result = await fetchJson(`/api/articles/${encodeURIComponent(articleId)}/favorite`, {
+    const result = await fetchJson(withLanguage(`/api/articles/${encodeURIComponent(articleId)}/favorite`), {
       method: wasFavorite ? "DELETE" : "POST",
     });
     if (state.view === "favorites" && !result.is_favorite) {
@@ -869,15 +1225,15 @@ function updateFavoriteButtons(articleId, isFavorite) {
     if (button.dataset.favorite !== articleId) return;
     button.classList.toggle("active", isFavorite);
     button.setAttribute("aria-pressed", String(isFavorite));
-    button.setAttribute("title", isFavorite ? "Remove from favorites" : "Add to favorites");
-    button.setAttribute("aria-label", isFavorite ? "Remove from favorites" : "Add to favorites");
+    button.setAttribute("title", isFavorite ? i18n("article.removeFavorite") : i18n("article.addFavorite"));
+    button.setAttribute("aria-label", isFavorite ? i18n("article.removeFavorite") : i18n("article.addFavorite"));
   });
 }
 
 function openMediaModal(src, title) {
   if (!mediaModal || !mediaModalImage || !src) return;
   mediaModalImage.src = src;
-  mediaModalImage.alt = title || "Article image preview";
+  mediaModalImage.alt = title || i18n("article.preview");
   mediaModal.hidden = false;
   mediaModalClose?.focus();
 }
@@ -916,7 +1272,7 @@ async function loadSuggestions() {
       .map((item) => `
         <button type="button" data-title="${escapeHtml(item.title)}">
           ${escapeHtml(item.title)}
-          <small>${escapeHtml(item.source)} - score ${escapeHtml(item.score)}</small>
+          <small>${escapeHtml(item.source)} - ${i18n("filters.score").toLowerCase()} ${escapeHtml(item.score)}</small>
         </button>
       `)
       .join("");
@@ -938,15 +1294,20 @@ function updateMultiSelectLabel(root) {
   const label = root.querySelector("[data-label]");
   const options = Array.from(root.querySelectorAll('input[name="fuentes"], input[name="areas"]'));
   const selected = options.filter((input) => input.checked);
-  const type = options[0]?.name === "fuentes" ? "sources" : "areas";
+  const isSources = options[0]?.name === "fuentes";
+  const type = isSources ? i18n("filters.sources") : i18n("filters.areas");
   if (!label) return;
   if (selected.length === options.length) {
-    label.textContent = `All ${type}`;
+    label.textContent = isSources ? i18n("filters.allSources") : i18n("filters.allAreas");
   } else if (selected.length === 1) {
-    label.textContent = selected[0].nextElementSibling?.textContent || `1 ${type.slice(0, -1)}`;
+    label.textContent = selected[0].nextElementSibling?.textContent || `1 ${type}`;
   } else {
     label.textContent = `${selected.length} ${type}`;
   }
+}
+
+function updateMultiSelectLabels() {
+  document.querySelectorAll("[data-multiselect]").forEach(updateMultiSelectLabel);
 }
 
 function syncSelectAll(root) {
@@ -1069,6 +1430,7 @@ initTheme();
 initSidebar();
 initMobileShell();
 initMultiSelects();
+initLanguage();
 syncDateMode();
 loadAll();
 window.setInterval(loadAll, 300000);

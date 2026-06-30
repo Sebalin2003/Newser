@@ -71,7 +71,7 @@ def index(request: Request):
         "index.html",
         {
             "sources": web_services.SOURCES,
-            "areas": web_services.AREAS,
+            "areas": web_services.area_options("es"),
             "min_date": minimum.isoformat(),
             "max_date": maximum.isoformat(),
         },
@@ -85,32 +85,33 @@ def api_feed(
     areas: Annotated[list[str] | None, Query()] = None,
     orden: str = "Puntaje",
     q: str | None = None,
+    lang: str = "es",
 ):
-    return web_services.get_feed(fecha=fecha, fuentes=fuentes, areas=areas, orden=orden, q=q)
+    return web_services.get_feed(fecha=fecha, fuentes=fuentes, areas=areas, orden=orden, q=q, lang=lang)
 
 
 @app.get("/api/brief")
-def api_brief(fecha: str | None = None):
-    return web_services.get_brief(fecha)
+def api_brief(fecha: str | None = None, lang: str = "es"):
+    return web_services.get_brief(fecha, lang=lang)
 
 
 @app.get("/api/daily-briefs")
-def api_daily_briefs():
-    return web_services.get_past_daily_briefs()
+def api_daily_briefs(lang: str = "es"):
+    return web_services.get_past_daily_briefs(lang=lang)
 
 
 @app.get("/api/favorites")
-def api_favorites():
-    return web_services.get_favorites()
+def api_favorites(lang: str = "es"):
+    return web_services.get_favorites(lang=lang)
 
 
 @app.get("/api/stats")
-def api_stats():
-    return web_services.get_stats()
+def api_stats(lang: str = "es"):
+    return web_services.get_stats(lang=lang)
 
 
 @app.get("/api/refresh-status")
-def api_refresh_status(request: Request):
+def api_refresh_status(request: Request, lang: str = "es"):
     scheduler = getattr(request.app.state, "scheduler", None)
     next_check_at = None
     if scheduler:
@@ -130,27 +131,28 @@ def api_search_suggestions(
     fecha: str | None = None,
     fuentes: Annotated[list[str] | None, Query()] = None,
     areas: Annotated[list[str] | None, Query()] = None,
+    lang: str = "es",
 ):
-    return {"suggestions": web_services.get_suggestions(q, fecha=fecha, fuentes=fuentes, areas=areas)}
+    return {"suggestions": web_services.get_suggestions(q, fecha=fecha, fuentes=fuentes, areas=areas, lang=lang)}
 
 
 @app.post("/api/articles/{article_id}/summary")
-def api_generate_summary(article_id: str):
-    result = web_services.generate_summary(article_id)
+def api_generate_summary(article_id: str, lang: str = "es"):
+    result = web_services.generate_summary(article_id, lang=lang)
     status_code = 200 if result.get("ok") else 400
     return JSONResponse(result, status_code=status_code)
 
 
 @app.post("/api/articles/{article_id}/favorite")
-def api_mark_favorite(article_id: str):
-    result = web_services.mark_favorite(article_id)
+def api_mark_favorite(article_id: str, lang: str = "es"):
+    result = web_services.mark_favorite(article_id, lang=lang)
     status_code = 200 if result.get("ok") else 404
     return JSONResponse(result, status_code=status_code)
 
 
 @app.delete("/api/articles/{article_id}/favorite")
-def api_remove_favorite(article_id: str):
-    result = web_services.remove_favorite(article_id)
+def api_remove_favorite(article_id: str, lang: str = "es"):
+    result = web_services.remove_favorite(article_id, lang=lang)
     status_code = 200 if result.get("ok") else 404
     return JSONResponse(result, status_code=status_code)
 
