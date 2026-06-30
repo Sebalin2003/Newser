@@ -114,6 +114,34 @@ class WebServiceTestCase(unittest.TestCase):
         self.assertEqual([item["id"] for item in result["items"]], ["keep"])
         self.assertEqual(result["count"], 1)
 
+    def test_feed_all_dates_disables_date_filter(self) -> None:
+        today = datetime.now(web_services.BRIEF_TIMEZONE).date()
+        yesterday = today - timedelta(days=1)
+        self.add_article(
+            "today",
+            "Agent runtime today",
+            "OpenAI Blog",
+            "ai_agents",
+            90,
+            published_at=datetime.combine(today, datetime.min.time(), tzinfo=timezone.utc),
+        )
+        self.add_article(
+            "yesterday",
+            "Agent runtime yesterday",
+            "OpenAI Blog",
+            "ai_agents",
+            80,
+            published_at=datetime.combine(yesterday, datetime.min.time(), tzinfo=timezone.utc),
+        )
+
+        today_result = web_services.get_feed(fecha=today.isoformat(), fuentes=["OpenAI Blog"])
+        all_result = web_services.get_feed(fecha="all", fuentes=["OpenAI Blog"])
+
+        self.assertEqual([item["id"] for item in today_result["items"]], ["today"])
+        self.assertEqual([item["id"] for item in all_result["items"]], ["today", "yesterday"])
+        self.assertEqual(all_result["fecha"], "all")
+        self.assertEqual(all_result["hot_topics"], [])
+
     def test_feed_deduplicates_repeated_articles_by_url_after_sorting(self) -> None:
         today = datetime.now(web_services.BRIEF_TIMEZONE).date().isoformat()
         repo_url = "https://github.com/calesthio/OpenMontage"
@@ -287,6 +315,18 @@ class WebServiceTestCase(unittest.TestCase):
         self.assertEqual([item["fecha"] for item in result["items"]], ["2026-06-24", "2026-06-18"])
         self.assertEqual(result["items"][0]["brief_json"], {"intro": "Yesterday", "items": []})
         self.assertIsNone(result["items"][1]["brief_json"])
+
+    def test_daily_brief_catchup_runs_only_after_8_when_missing(self) -> None:
+        tz = web_services.BRIEF_TIMEZONE
+        before_8 = datetime(2026, 6, 29, 7, 59, tzinfo=tz)
+        after_8 = datetime(2026, 6, 29, 8, 1, tzinfo=tz)
+
+        self.assertFalse(web_services.should_catch_up_daily_brief(before_8))
+        self.assertTrue(web_services.should_catch_up_daily_brief(after_8))
+
+        self.add_brief(date(2026, 6, 29), "today")
+
+        self.assertFalse(web_services.should_catch_up_daily_brief(after_8))
 
     def test_favorite_columns_are_declared(self) -> None:
         columns = {column["name"] for column in inspect(self.engine).get_columns("noticias")}
@@ -547,6 +587,18 @@ class WebApiRouteTests(unittest.TestCase):
             if scheduler.running:
                 scheduler.shutdown(wait=False)
 
+    def test_scheduler_can_register_daily_brief_catchup_job(self) -> None:
+        import web_app
+
+        scheduler = web_app.create_scheduler()
+        try:
+            with patch.object(web_app.web_services, "should_catch_up_daily_brief", return_value=True):
+                self.assertTrue(web_app.schedule_daily_brief_catchup(scheduler))
+            self.assertIsNotNone(scheduler.get_job(web_app.DAILY_BRIEF_CATCHUP_JOB_ID))
+        finally:
+            if scheduler.running:
+                scheduler.shutdown(wait=False)
+
 
 class WebUiStaticTests(unittest.TestCase):
     def test_new_filter_controls_replace_refresh_and_order_select(self) -> None:
@@ -574,6 +626,10 @@ class WebUiStaticTests(unittest.TestCase):
         self.assertIn("function submitSearch()", script)
         self.assertIn('event.key !== "Enter"', script)
         self.assertIn("event.preventDefault()", script)
+        input_handler = script.split('search.addEventListener("input"', maxsplit=1)[1].split('search.addEventListener("keydown"', maxsplit=1)[0]
+        self.assertIn("loadSuggestions();", input_handler)
+        self.assertNotIn("state.query = search.value.trim()", input_handler)
+        self.assertNotIn("loadAll();\n  }, 250)", input_handler)
 
     def test_daily_briefs_mode_ui_is_present(self) -> None:
         template = Path("templates/index.html").read_text(encoding="utf-8")
@@ -601,6 +657,9 @@ class WebUiStaticTests(unittest.TestCase):
         self.assertIn('id="favorites"', template)
         self.assertIn('id="favorites-feed"', template)
         self.assertIn("favorites-feed-list", template)
+        favorites_block = template.split('id="favorites"', maxsplit=1)[1].split('id="daily-briefs"', maxsplit=1)[0]
+        self.assertNotIn("favorites-title", favorites_block)
+        self.assertNotIn("Articles and repositories you marked for follow-up.", favorites_block)
         self.assertIn("Executive summary", template)
         self.assertIn("Previous daily briefs", template)
         self.assertIn("previous 7 days", template)
@@ -637,14 +696,39 @@ class WebUiStaticTests(unittest.TestCase):
         self.assertIn("Use the heart button", script)
         self.assertNotIn("Saved to favorites.", script)
         self.assertNotIn("Removed from favorites.", script)
-        self.assertIn("/static/app.js?v=favorite-status-v1", template)
-        self.assertIn("/static/app.css?v=favorite-status-v1", template)
+        self.assertIn("/static/app.js?v=search-enter-results-v1", template)
+        self.assertIn("/static/app.css?v=search-enter-results-v1", template)
+        self.assertIn('id="desktop-theme-toggle"', template)
+        self.assertNotIn('id="mobile-theme-toggle"', template)
+        self.assertIn('aria-label="Switch to light mode"', template)
+        self.assertIn('document.documentElement.dataset.theme', template)
+        self.assertIn('localStorage.getItem("newser.theme") || "dark"', template)
+        self.assertIn("function initTheme()", script)
+        self.assertIn("function setTheme(theme)", script)
+        self.assertIn('window.localStorage.setItem("newser.theme", selectedTheme)', script)
+        self.assertIn("initTheme();", script)
+        self.assertIn('html[data-theme="light"]', styles)
+        self.assertIn("color-scheme: light", styles)
+        self.assertIn("--sidebar-bg: #eef3f8", styles)
+        self.assertIn("--text: #172131", styles)
+        self.assertIn(".sidebar-theme-toggle", styles)
         topbar = template.split('class="topbar"', maxsplit=1)[1].split('id="status"', maxsplit=1)[0]
         self.assertNotIn("Command center", topbar)
         self.assertIn('id="topbar-date"', template)
+        self.assertIn("data-all-dates", template)
+        self.assertIn("date-all-option", template)
+        self.assertIn('id="topbar-subtitle"', template)
         self.assertIn("topbarTitle.textContent", script)
         self.assertIn("function updateTopbarTitle()", script)
         self.assertIn("formatFeedDate(selectedDate)", script)
+        self.assertIn('params.set("fecha", "all")', script)
+        self.assertIn("function syncDateMode()", script)
+        self.assertIn("dateInput.disabled = allDates", script)
+        self.assertIn('dateModeLabel.textContent = allDates ? "All dates" : "Today"', script)
+        self.assertIn(".date-all-option", styles)
+        self.assertIn("input:disabled", styles)
+        self.assertIn("Every morning at 8 o'clock", script)
+        self.assertIn(".topbar-subtitle", styles)
         self.assertNotIn("topbarEyebrow", script)
         self.assertIn('search.value = ""', script)
         self.assertIn("archive-empty", script)
@@ -660,10 +744,12 @@ class WebUiStaticTests(unittest.TestCase):
         self.assertIn(".daily-brief-toggle", styles)
         self.assertIn(".daily-brief-chevron", styles)
         self.assertIn(".topbar-date", styles)
-        archive_window_styles = styles.split(".archive-window {", maxsplit=1)[1].split("}", maxsplit=1)[0]
-        self.assertIn("text-align: center", archive_window_styles)
+        self.assertNotIn("archive-hero", template)
+        self.assertNotIn(".archive-hero", styles)
+        self.assertNotIn(".archive-window", styles)
         self.assertIn(".favorites-view", styles)
         self.assertIn(".favorites-feed-list", styles)
+        self.assertNotIn(".favorites-title", styles)
         self.assertIn(".favorite-button", styles)
         self.assertIn(".summary-spinner", styles)
         self.assertIn("@keyframes summary-spin", styles)
@@ -677,7 +763,7 @@ class WebUiStaticTests(unittest.TestCase):
         self.assertIn(".media-modal", styles)
         self.assertIn(".media-play", styles)
         self.assertIn("border-radius: 50%", styles)
-        self.assertIn("background: rgba(255, 80, 134, 0.13)", styles)
+        self.assertIn("background: var(--favorite-tint)", styles)
         self.assertNotIn("background: #ffe2ec", styles)
         self.assertIn("fill: transparent", styles)
         self.assertIn("fill: currentColor", styles)
@@ -691,6 +777,7 @@ class WebUiStaticTests(unittest.TestCase):
 
         self.assertIn('id="system-status-button"', template)
         self.assertIn('data-view-target="system"', template)
+        self.assertNotIn('id="refresh-status"', template)
         self.assertIn('id="system-status"', template)
         self.assertIn("Operations overview", template)
         self.assertIn('id="system-health"', template)
@@ -702,6 +789,8 @@ class WebUiStaticTests(unittest.TestCase):
         self.assertIn('fetchJson("/api/refresh-status")', script)
         self.assertIn("renderSourceBreakdown", script)
         self.assertIn("view-system", script)
+        system_hide_block = styles.split("body.view-system .today-only,", maxsplit=1)[1].split("{", maxsplit=1)[0]
+        self.assertIn("body.view-system .feed-controls", system_hide_block)
         self.assertIn(".system-status-view", styles)
         self.assertIn(".system-health-grid", styles)
         self.assertIn(".source-breakdown", styles)
@@ -737,21 +826,93 @@ class WebUiStaticTests(unittest.TestCase):
         self.assertNotIn("<h1>Newser</h1>", brand_block)
         self.assertIn("brand-tagline", brand_block)
         self.assertIn("IT News Trend Analyzer", brand_block)
+        self.assertNotIn('id="theme-toggle"', brand_block)
+        self.assertIn('id="desktop-theme-toggle"', template)
+        self.assertIn("sidebar-theme-section", template)
         self.assertIn("width: 86px", styles)
         self.assertIn('id="sidebar-toggle"', template)
         self.assertIn('class="nav-icon"', template)
         self.assertNotIn("data-short=", template)
         self.assertIn("body.sidebar-collapsed .nav-button > span:not(.nav-icon)", styles)
         self.assertIn("body.sidebar-collapsed .nav-icon", styles)
+        collapsed_theme_styles = styles.split("body.sidebar-collapsed .sidebar-theme-section", maxsplit=1)[1].split("}", maxsplit=1)[0]
+        self.assertIn("display: none", collapsed_theme_styles)
         self.assertIn(".nav-button[data-view-target=\"favorites\"] .nav-icon path", styles)
         self.assertIn("function setSidebarCollapsed", script)
         self.assertIn("function initSidebar", script)
+        self.assertIn("if (isPhoneViewport())", script)
+        self.assertIn("closeMobileDrawer();", script)
+        self.assertIn('document.querySelectorAll("#desktop-theme-toggle, [data-mobile-theme-action]")', script)
         self.assertIn("newser.sidebarCollapsed.mobile", script)
         self.assertIn("newser.sidebarCollapsed.desktop", script)
         self.assertIn("const shouldCollapse = saved === null ? isMobile", script)
         self.assertIn("body.sidebar-collapsed", styles)
         self.assertIn("grid-template-columns: 78px minmax(0, 1fr)", styles)
         self.assertIn("height: calc(72px + env(safe-area-inset-top, 0px))", styles)
+
+    def test_mobile_shell_navigation_and_drawer_are_present(self) -> None:
+        template = Path("templates/index.html").read_text(encoding="utf-8")
+        script = Path("static/app.js").read_text(encoding="utf-8")
+        styles = Path("static/app.css").read_text(encoding="utf-8")
+
+        self.assertIn('class="mobile-appbar"', template)
+        self.assertIn('id="mobile-menu-toggle"', template)
+        self.assertNotIn('id="mobile-theme-toggle"', template)
+        self.assertIn('id="mobile-drawer-backdrop"', template)
+        self.assertIn('class="mobile-tabbar"', template)
+        self.assertIn('data-view-target="more"', template)
+        self.assertIn('id="mobile-more"', template)
+        mobile_more = template.split('id="mobile-more"', maxsplit=1)[1].split('id="system-status"', maxsplit=1)[0]
+        self.assertNotIn("Feed filters", mobile_more)
+        self.assertNotIn("data-mobile-open-drawer", mobile_more)
+        self.assertNotIn("mobile-more-hero", mobile_more)
+        self.assertIn("System Status", mobile_more)
+        self.assertIn("Appearance", mobile_more)
+        self.assertNotIn("About", mobile_more)
+        self.assertNotIn("IT News Trend Analyzer for AI", mobile_more)
+        self.assertIn("mobile-more-theme-toggle", mobile_more)
+        self.assertIn("mobile-theme-main", mobile_more)
+        self.assertIn("mobile-theme-state", mobile_more)
+        self.assertIn("sidebar-theme-icon", mobile_more)
+        self.assertIn("sidebar-theme-copy", mobile_more)
+        self.assertIn("Switch between dark and light mode.", mobile_more)
+        self.assertNotIn("mobile-more-theme-indicator", mobile_more)
+        self.assertIn("function initMobileShell()", script)
+        self.assertIn("function openMobileDrawer()", script)
+        self.assertIn("function closeMobileDrawer()", script)
+        self.assertIn('window.matchMedia("(max-width: 900px)")', script)
+        self.assertIn("mobileMenuToggle.hidden = !todayActive", script)
+        self.assertNotIn("data-mobile-open-drawer", script)
+        self.assertIn('state.view === "more"', script)
+        self.assertIn("view-more", script)
+        self.assertIn("mobile-drawer-open", script)
+        self.assertIn("@media (max-width: 900px)", styles)
+        self.assertIn(".mobile-appbar", styles)
+        self.assertIn(".mobile-tabbar", styles)
+        self.assertIn(".mobile-more-view", styles)
+        self.assertIn(".mobile-more-theme-toggle", styles)
+        self.assertIn(".mobile-theme-main", styles)
+        self.assertIn(".mobile-theme-state", styles)
+        self.assertIn("body.sidebar-collapsed .mobile-more-theme-toggle .sidebar-theme-copy", styles)
+        self.assertIn("const themeStateLabels", script)
+        self.assertIn("[data-theme-state]", script)
+        self.assertIn(".mobile-drawer-backdrop", styles)
+        self.assertIn(".sidebar-theme-section", styles)
+        mobile_styles = styles.rsplit("@media (max-width: 900px)", maxsplit=1)[1]
+        self.assertIn(".mode-nav", mobile_styles)
+        self.assertIn("display: none", mobile_styles.split(".mode-nav", maxsplit=1)[1].split("}", maxsplit=1)[0])
+        self.assertIn(".sidebar-theme-section", mobile_styles)
+        self.assertIn("display: none", mobile_styles.split(".sidebar-theme-section", maxsplit=1)[1].split("}", maxsplit=1)[0])
+        self.assertIn(".system-section", mobile_styles)
+        self.assertIn("body.sidebar-collapsed .system-section", mobile_styles)
+        self.assertIn("body.sidebar-collapsed .sidebar-theme-section", mobile_styles)
+        self.assertIn("width: min(82vw, 300px)", mobile_styles)
+        self.assertIn("max-width: 300px", mobile_styles)
+        self.assertIn("env(safe-area-inset-bottom", styles)
+        self.assertIn("grid-template-columns: repeat(4, minmax(0, 1fr))", styles)
+        self.assertIn("transform: translateX(-105%)", styles)
+        self.assertIn("body.mobile-drawer-open .sidebar", styles)
+        self.assertIn("-webkit-line-clamp: 3", styles)
 
     def test_github_star_titles_use_svg_icon(self) -> None:
         script = Path("static/app.js").read_text(encoding="utf-8")

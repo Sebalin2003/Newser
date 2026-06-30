@@ -6,7 +6,10 @@
   <title>Newser</title>
   <link rel="icon" type="image/png" href="/assets/favicon.png?v=logo-v1">
   <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png?v=logo-v1">
-  <link rel="stylesheet" href="/static/app.css?v=favorite-status-v1">
+  <script>
+    document.documentElement.dataset.theme = localStorage.getItem("newser.theme") || "dark";
+  </script>
+  <link rel="stylesheet" href="/static/app.css?v=search-enter-results-v1">
 </head>
 <body>
   <aside class="sidebar">
@@ -15,9 +18,11 @@
         <img src="/assets/newser-lockup.png" alt="Newser" onerror="this.style.display='none'">
         <p class="brand-tagline">IT News Trend Analyzer</p>
       </div>
-      <button id="sidebar-toggle" class="sidebar-toggle" type="button" aria-label="Collapse sidebar" aria-expanded="true">
-        <span aria-hidden="true"></span>
-      </button>
+      <div class="sidebar-tools">
+        <button id="sidebar-toggle" class="sidebar-toggle" type="button" aria-label="Collapse sidebar" aria-expanded="true">
+          <span aria-hidden="true"></span>
+        </button>
+      </div>
     </div>
 
     <nav class="sidebar-section mode-nav" aria-label="Main navigation">
@@ -72,12 +77,16 @@
       <div class="sidebar-section feed-controls">
         <div class="sidebar-section-head">
           <p class="eyebrow">Feed controls</p>
-          <span>Today</span>
+          <span data-date-mode-label>Today</span>
         </div>
 
         <label class="field">
           <span>Date</span>
           <input type="date" name="fecha" min="{{ min_date }}" max="{{ max_date }}" value="{{ max_date }}">
+        </label>
+        <label class="check date-all-option">
+          <input type="checkbox" data-all-dates>
+          <span>All dates</span>
         </label>
 
         <div class="multi-select" data-multiselect>
@@ -142,18 +151,48 @@
             <small>Health, metrics, and source coverage.</small>
           </span>
         </button>
-        <div id="refresh-status" class="refresh-status">Automatic updates enabled.</div>
       </div>
     </form>
+    <div class="sidebar-theme-section">
+      <button id="desktop-theme-toggle" class="sidebar-theme-toggle" type="button" aria-label="Switch to light mode" aria-pressed="false">
+        <span class="sidebar-theme-icon" aria-hidden="true">
+          <svg class="theme-icon theme-icon-sun" viewBox="0 0 24 24" focusable="false">
+            <circle cx="12" cy="12" r="4"></circle>
+            <path d="M12 2.5v2.2M12 19.3v2.2M4.7 4.7l1.55 1.55M17.75 17.75l1.55 1.55M2.5 12h2.2M19.3 12h2.2M4.7 19.3l1.55-1.55M17.75 6.25l1.55-1.55"></path>
+          </svg>
+          <svg class="theme-icon theme-icon-moon" viewBox="0 0 24 24" focusable="false">
+            <path d="M20.2 15.15A7.85 7.85 0 0 1 8.85 3.8 8.2 8.2 0 1 0 20.2 15.15Z"></path>
+          </svg>
+        </span>
+        <span class="sidebar-theme-copy">
+          <strong>Appearance</strong>
+          <small>Switch theme</small>
+        </span>
+      </button>
+    </div>
   </aside>
+  <div id="mobile-drawer-backdrop" class="mobile-drawer-backdrop" hidden></div>
 
   <main class="workspace">
+    <header class="mobile-appbar">
+      <div class="mobile-brand">
+        <img src="/assets/newser-lockup.png" alt="Newser" onerror="this.style.display='none'">
+        <span id="mobile-view-label">Updates</span>
+      </div>
+      <div class="mobile-appbar-actions">
+        <button id="mobile-menu-toggle" class="mobile-menu-toggle" type="button" aria-label="Open filters and settings" aria-expanded="false">
+          <span aria-hidden="true"></span>
+        </button>
+      </div>
+    </header>
+
     <header class="topbar">
       <div>
         <h2>
           <span id="topbar-title-main">Today&rsquo;s Updates</span>
           <span id="topbar-date" class="topbar-date" hidden></span>
         </h2>
+        <p id="topbar-subtitle" class="topbar-subtitle" hidden></p>
       </div>
       <div class="search today-only">
         <input id="search" type="text" placeholder="Search corpus" autocomplete="off">
@@ -182,25 +221,10 @@
     </section>
 
     <section id="favorites" class="favorites-view" hidden>
-      <div class="section-title favorites-title">
-        <h3>Saved articles</h3>
-        <p>Articles and repositories you marked for follow-up.</p>
-      </div>
       <div id="favorites-feed" class="favorites-feed-list"></div>
     </section>
 
     <section id="daily-briefs" class="daily-briefs archive-workspace" hidden>
-      <div class="archive-hero">
-        <div>
-          <p class="eyebrow">Brief mode</p>
-          <h3>Daily Briefs</h3>
-          <p>Today’s executive summary and stored daily briefs from the previous 7 days. Historical missing days are omitted.</p>
-        </div>
-        <div class="archive-window">
-          <strong>7 days</strong>
-          <span>Newest first</span>
-        </div>
-      </div>
       <section class="panel" id="brief">
         <div class="section-title">
           <p class="eyebrow">Today</p>
@@ -213,6 +237,42 @@
         <h3>Previous daily briefs</h3>
       </div>
       <div id="daily-briefs-list" class="daily-brief-list"></div>
+    </section>
+
+    <section id="mobile-more" class="mobile-more-view" hidden>
+      <div class="mobile-more-groups">
+        <section class="mobile-more-card">
+          <p class="eyebrow">Content</p>
+          <button type="button" data-view-target="system">
+            <span>
+              <strong>System Status</strong>
+              <small>Update health, metrics, and sources.</small>
+            </span>
+            <span aria-hidden="true">&rsaquo;</span>
+          </button>
+        </section>
+        <section class="mobile-more-card">
+          <p class="eyebrow">Preferences</p>
+          <button class="sidebar-theme-toggle mobile-more-theme-toggle" type="button" data-mobile-theme-action aria-label="Switch to light mode" aria-pressed="false">
+            <span class="mobile-theme-main">
+              <span class="sidebar-theme-icon" aria-hidden="true">
+                <svg class="theme-icon theme-icon-sun" viewBox="0 0 24 24" focusable="false">
+                  <circle cx="12" cy="12" r="4"></circle>
+                  <path d="M12 2.5v2.2M12 19.3v2.2M4.7 4.7l1.55 1.55M17.75 17.75l1.55 1.55M2.5 12h2.2M19.3 12h2.2M4.7 19.3l1.55-1.55M17.75 6.25l1.55-1.55"></path>
+                </svg>
+                <svg class="theme-icon theme-icon-moon" viewBox="0 0 24 24" focusable="false">
+                  <path d="M20.2 15.15A7.85 7.85 0 0 1 8.85 3.8 8.2 8.2 0 1 0 20.2 15.15Z"></path>
+                </svg>
+              </span>
+              <span class="sidebar-theme-copy">
+                <strong>Appearance</strong>
+                <small>Switch between dark and light mode.</small>
+              </span>
+            </span>
+            <span class="mobile-theme-state" data-theme-state>Dark</span>
+          </button>
+        </section>
+      </div>
     </section>
 
     <section id="system-status" class="system-status-view" hidden>
@@ -251,11 +311,49 @@
     </section>
   </main>
 
+  <nav class="mobile-tabbar" aria-label="Mobile navigation">
+    <button type="button" class="mobile-tab active" data-view-target="today" aria-label="Updates">
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path d="M20 12a8 8 0 0 1-13.7 5.65"></path>
+        <path d="M4 12A8 8 0 0 1 17.7 6.35"></path>
+        <path d="M17.7 3.8v2.55h-2.55"></path>
+        <path d="M6.3 20.2v-2.55h2.55"></path>
+      </svg>
+      <span>Updates</span>
+    </button>
+    <button type="button" class="mobile-tab" data-view-target="briefs" aria-label="Briefs">
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path d="M7 3.5h7l3 3v14H7z"></path>
+        <path d="M14 3.5v3h3"></path>
+        <path d="M9.5 10.25l1 1 2-2"></path>
+        <path d="M14.25 10.5h1.75"></path>
+        <path d="M9.5 15.25l1 1 2-2"></path>
+        <path d="M14.25 15.5h1.75"></path>
+      </svg>
+      <span>Briefs</span>
+    </button>
+    <button type="button" class="mobile-tab" data-view-target="favorites" aria-label="Favorites">
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path d="M12 20.2 10.65 19C5.85 14.65 3 12.05 3 8.85 3 6.25 5.05 4.2 7.65 4.2c1.45 0 2.85.68 3.75 1.75h1.2c.9-1.07 2.3-1.75 3.75-1.75 2.6 0 4.65 2.05 4.65 4.65 0 3.2-2.85 5.8-7.65 10.15z"></path>
+      </svg>
+      <span>Saved</span>
+    </button>
+    <button type="button" class="mobile-tab" data-view-target="more" aria-label="More">
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path d="M5 5h5v5H5z"></path>
+        <path d="M14 5h5v5h-5z"></path>
+        <path d="M5 14h5v5H5z"></path>
+        <path d="M14 14h5v5h-5z"></path>
+      </svg>
+      <span>More</span>
+    </button>
+  </nav>
+
   <div id="media-modal" class="media-modal" hidden role="dialog" aria-modal="true" aria-label="Image preview">
     <button id="media-modal-close" class="media-modal-close" type="button" aria-label="Close image preview">x</button>
     <img id="media-modal-image" alt="">
   </div>
 
-  <script src="/static/app.js?v=favorite-status-v1"></script>
+  <script src="/static/app.js?v=search-enter-results-v1"></script>
 </body>
 </html>

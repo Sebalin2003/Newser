@@ -33,6 +33,7 @@ CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.yaml"
 BRIEF_TIMEZONE = ZoneInfo("America/Argentina/Buenos_Aires")
 FILTER_WINDOW_DAYS = 7
 FEED_REFRESH_INTERVAL = timedelta(minutes=30)
+DAILY_BRIEF_HOUR = 8
 HOT_TOPIC_MIN_SOURCES = 3
 HOT_TOPIC_SUPPORT_LIMIT = 5
 HOT_TOPIC_SIMILARITY_THRESHOLD = 0.42
@@ -149,6 +150,10 @@ def parse_filter_date(value: Any, today: date | None = None) -> date:
     except (TypeError, ValueError):
         return maximum
     return parsed if minimum <= parsed <= maximum else maximum
+
+
+def is_all_dates_filter(value: Any) -> bool:
+    return str(value or "").strip().lower() == "all"
 
 
 def _score_display_fields(n: Noticia, config: dict[str, Any]) -> dict[str, Any]:
@@ -326,7 +331,8 @@ def get_feed(
     limit: int = 80,
 ) -> dict[str, Any]:
     config = load_config()
-    selected_date = parse_filter_date(fecha)
+    all_dates = is_all_dates_filter(fecha)
+    selected_date = None if all_dates else parse_filter_date(fecha)
     source_filter = [source for source in (fuentes or []) if source]
     area_filter = [area for area in (areas or []) if area]
     query_text = (q or "").strip()
@@ -343,7 +349,7 @@ def get_feed(
                     Noticia.resumen_ia.ilike(pattern),
                 )
             )
-        else:
+        elif not all_dates:
             query = query.filter(Noticia.fecha_ingesta >= cutoff)
         if source_filter:
             query = query.filter(Noticia.fuente.in_(source_filter))
@@ -351,14 +357,15 @@ def get_feed(
             query = query.filter(Noticia.area_matcheada.in_(area_filter_keys(area_filter)))
         rows = query.order_by(Noticia.fecha_ingesta.desc()).limit(300).all()
         items = [_serialize_article(row, config) for row in rows]
-    items = [item for item in items if _matches_date(item, selected_date)]
+    if selected_date is not None:
+        items = [item for item in items if _matches_date(item, selected_date)]
     items = _dedupe_feed_items(_sort_items(items, orden))[:limit]
     return {
         "items": items,
         "count": len(items),
-        "fecha": selected_date.isoformat(),
+        "fecha": "all" if all_dates else selected_date.isoformat(),
         "orden": orden,
-        "hot_topics": get_hot_topics(selected_date),
+        "hot_topics": [] if all_dates else get_hot_topics(selected_date),
     }
 
 
@@ -369,6 +376,23 @@ def get_brief(fecha: str | None = None) -> dict[str, Any]:
         if not brief:
             return {"available": False, "fecha": selected_date.isoformat()}
         return {"available": True, **_serialize_brief(brief)}
+
+
+def daily_brief_exists(brief_date: date | None = None) -> bool:
+    selected_date = brief_date or datetime.now(BRIEF_TIMEZONE).date()
+    with get_session() as session:
+        return session.query(MacroResumen.id).filter(MacroResumen.fecha == selected_date).first() is not None
+
+
+def should_catch_up_daily_brief(now: datetime | None = None) -> bool:
+    current = now or datetime.now(BRIEF_TIMEZONE)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=BRIEF_TIMEZONE)
+    else:
+        current = current.astimezone(BRIEF_TIMEZONE)
+    if current.hour < DAILY_BRIEF_HOUR:
+        return False
+    return not daily_brief_exists(current.date())
 
 
 def _serialize_brief(brief: MacroResumen) -> dict[str, Any]:

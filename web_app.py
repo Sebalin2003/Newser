@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from datetime import datetime
 from pathlib import Path
 from typing import Annotated
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.date import DateTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 from fastapi import FastAPI, Query
 from fastapi.responses import JSONResponse
@@ -20,6 +22,7 @@ from src import web_services
 BASE_DIR = Path(__file__).resolve().parent
 REFRESH_JOB_ID = "feed_refresh"
 DAILY_BRIEF_JOB_ID = "daily_brief"
+DAILY_BRIEF_CATCHUP_JOB_ID = "daily_brief_catchup"
 
 
 @asynccontextmanager
@@ -29,6 +32,7 @@ async def lifespan(app_instance: FastAPI):
     scheduler.start()
     app_instance.state.scheduler = scheduler
     web_services.ensure_feed_refresh(background=True)
+    schedule_daily_brief_catchup(scheduler)
     try:
         yield
     finally:
@@ -54,6 +58,19 @@ def create_scheduler() -> BackgroundScheduler:
         replace_existing=True,
     )
     return scheduler
+
+
+def schedule_daily_brief_catchup(scheduler: BackgroundScheduler) -> bool:
+    if not web_services.should_catch_up_daily_brief():
+        return False
+    scheduler.add_job(
+        web_services.generate_daily_brief_job,
+        trigger=DateTrigger(run_date=datetime.now(web_services.BRIEF_TIMEZONE), timezone=web_services.BRIEF_TIMEZONE),
+        id=DAILY_BRIEF_CATCHUP_JOB_ID,
+        max_instances=1,
+        replace_existing=True,
+    )
+    return True
 
 
 app = FastAPI(title="Newser Web", lifespan=lifespan)

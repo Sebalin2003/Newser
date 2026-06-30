@@ -6,6 +6,12 @@ const state = {
 
 const filters = document.querySelector("#filters");
 const sidebarToggle = document.querySelector("#sidebar-toggle");
+const themeToggles = document.querySelectorAll("#desktop-theme-toggle, [data-mobile-theme-action]");
+const themeStateLabels = document.querySelectorAll("[data-theme-state]");
+const mobileMenuToggle = document.querySelector("#mobile-menu-toggle");
+const mobileDrawerBackdrop = document.querySelector("#mobile-drawer-backdrop");
+const mobileViewLabel = document.querySelector("#mobile-view-label");
+const mobileMore = document.querySelector("#mobile-more");
 const navButtons = document.querySelectorAll("[data-view-target]");
 const feed = document.querySelector("#feed");
 const feedTitle = document.querySelector("#feed-title");
@@ -13,6 +19,9 @@ const feedMeta = document.querySelector("#feed-meta");
 const topbarTitle = document.querySelector(".topbar h2");
 const topbarTitleMain = document.querySelector("#topbar-title-main");
 const topbarDate = document.querySelector("#topbar-date");
+const topbarSubtitle = document.querySelector("#topbar-subtitle");
+const allDatesToggle = document.querySelector("[data-all-dates]");
+const dateModeLabel = document.querySelector("[data-date-mode-label]");
 const stats = document.querySelector("#stats");
 const brief = document.querySelector("#brief");
 const hotTopics = document.querySelector("#hot-topics");
@@ -20,7 +29,6 @@ const statusLine = document.querySelector("#status");
 const search = document.querySelector("#search");
 const suggestions = document.querySelector("#suggestions");
 const clearSearch = document.querySelector("#clear-search");
-const refreshStatus = document.querySelector("#refresh-status");
 const overviewSections = document.querySelectorAll(".overview-only");
 const dailyBriefs = document.querySelector("#daily-briefs");
 const dailyBriefsList = document.querySelector("#daily-briefs-list");
@@ -45,7 +53,11 @@ function formParams() {
   const params = new URLSearchParams();
   const fecha = data.get("fecha");
   const orden = data.get("orden") || "Puntaje";
-  if (fecha) params.set("fecha", fecha);
+  if (allDatesToggle?.checked) {
+    params.set("fecha", "all");
+  } else if (fecha) {
+    params.set("fecha", fecha);
+  }
   params.set("orden", orden);
   for (const source of data.getAll("fuentes")) params.append("fuentes", source);
   for (const area of data.getAll("areas")) params.append("areas", area);
@@ -115,13 +127,16 @@ function updateTopbarTitle() {
   const briefsActive = state.view === "briefs";
   const favoritesActive = state.view === "favorites";
   const systemActive = state.view === "system";
+  const moreActive = state.view === "more";
   const title = briefsActive
     ? "Daily Briefs"
     : favoritesActive
       ? "Favorites"
       : systemActive
         ? "System Status"
-        : "Today\u2019s Updates";
+        : moreActive
+          ? "More"
+          : "Today\u2019s Updates";
 
   if (topbarTitleMain) {
     topbarTitleMain.textContent = title;
@@ -130,12 +145,28 @@ function updateTopbarTitle() {
   }
 
   if (!topbarDate) return;
+  if (topbarSubtitle) {
+    topbarSubtitle.hidden = !briefsActive;
+    topbarSubtitle.textContent = briefsActive ? "Every morning at 8 o'clock" : "";
+  }
   const dateInput = filters.querySelector('input[name="fecha"]');
+  const allDates = Boolean(allDatesToggle?.checked);
   const selectedDate = dateInput?.value || "";
   const latestDate = dateInput?.max || "";
-  const showDate = state.view === "today" && selectedDate && latestDate && selectedDate !== latestDate;
+  const showDate = state.view === "today" && (allDates || (selectedDate && latestDate && selectedDate !== latestDate));
   topbarDate.hidden = !showDate;
-  topbarDate.textContent = showDate ? formatFeedDate(selectedDate) : "";
+  topbarDate.textContent = allDates ? "All dates" : (showDate ? formatFeedDate(selectedDate) : "");
+  if (mobileViewLabel) {
+    mobileViewLabel.textContent = allDates ? "All dates" : (showDate ? formatFeedDate(selectedDate) : title.replace("Today\u2019s ", ""));
+  }
+}
+
+function syncDateMode() {
+  const dateInput = filters.querySelector('input[name="fecha"]');
+  const allDates = Boolean(allDatesToggle?.checked);
+  if (dateInput) dateInput.disabled = allDates;
+  if (dateModeLabel) dateModeLabel.textContent = allDates ? "All dates" : "Today";
+  updateTopbarTitle();
 }
 
 function hasSummary(item) {
@@ -163,6 +194,10 @@ async function loadAll() {
   }
   if (state.view === "system") {
     await loadSystemStatus();
+    return;
+  }
+  if (state.view === "more") {
+    updateTopbarTitle();
     return;
   }
   if (state.loading) return;
@@ -256,13 +291,17 @@ function setViewMode(view) {
   const briefsActive = view === "briefs";
   const favoritesActive = view === "favorites";
   const systemActive = view === "system";
+  const moreActive = view === "more";
   const todayActive = view === "today";
   document.body.classList.toggle("view-briefs", briefsActive);
   document.body.classList.toggle("view-favorites", favoritesActive);
   document.body.classList.toggle("view-system", systemActive);
+  document.body.classList.toggle("view-more", moreActive);
   dailyBriefs.hidden = !briefsActive;
   favorites.hidden = !favoritesActive;
   systemStatus.hidden = !systemActive;
+  if (mobileMore) mobileMore.hidden = !moreActive;
+  if (mobileMenuToggle) mobileMenuToggle.hidden = !todayActive;
   updateTopbarTitle();
   navButtons.forEach((button) => {
     const active = button.dataset.viewTarget === view;
@@ -276,6 +315,7 @@ function setViewMode(view) {
     suggestions.hidden = true;
     suggestions.innerHTML = "";
   }
+  closeMobileDrawer();
 }
 
 function setSearchMode(active) {
@@ -291,6 +331,61 @@ function setSidebarCollapsed(collapsed) {
   sidebarToggle.setAttribute("aria-label", collapsed ? "Expand sidebar" : "Collapse sidebar");
 }
 
+function setTheme(theme) {
+  const selectedTheme = theme === "light" ? "light" : "dark";
+  document.documentElement.dataset.theme = selectedTheme;
+  window.localStorage.setItem("newser.theme", selectedTheme);
+  const isLight = selectedTheme === "light";
+  themeToggles.forEach((button) => {
+    button.setAttribute("aria-pressed", String(isLight));
+    button.setAttribute("aria-label", isLight ? "Switch to dark mode" : "Switch to light mode");
+    button.setAttribute("title", isLight ? "Switch to dark mode" : "Switch to light mode");
+  });
+  themeStateLabels.forEach((label) => {
+    label.textContent = isLight ? "Light" : "Dark";
+  });
+}
+
+function initTheme() {
+  const savedTheme = window.localStorage.getItem("newser.theme") || "dark";
+  setTheme(savedTheme);
+  themeToggles.forEach((button) => button.addEventListener("click", () => {
+    const currentTheme = document.documentElement.dataset.theme === "light" ? "light" : "dark";
+    setTheme(currentTheme === "light" ? "dark" : "light");
+  }));
+}
+
+function isPhoneViewport() {
+  return window.matchMedia("(max-width: 900px)").matches;
+}
+
+function openMobileDrawer() {
+  if (!isPhoneViewport()) return;
+  document.body.classList.add("mobile-drawer-open");
+  if (mobileDrawerBackdrop) mobileDrawerBackdrop.hidden = false;
+  mobileMenuToggle?.setAttribute("aria-expanded", "true");
+}
+
+function closeMobileDrawer() {
+  document.body.classList.remove("mobile-drawer-open");
+  if (mobileDrawerBackdrop) mobileDrawerBackdrop.hidden = true;
+  mobileMenuToggle?.setAttribute("aria-expanded", "false");
+}
+
+function initMobileShell() {
+  mobileMenuToggle?.addEventListener("click", () => {
+    if (document.body.classList.contains("mobile-drawer-open")) {
+      closeMobileDrawer();
+    } else {
+      openMobileDrawer();
+    }
+  });
+  mobileDrawerBackdrop?.addEventListener("click", closeMobileDrawer);
+  window.addEventListener("resize", () => {
+    if (!isPhoneViewport()) closeMobileDrawer();
+  });
+}
+
 function initSidebar() {
   if (!sidebarToggle) return;
   const isMobile = window.matchMedia("(max-width: 900px)").matches;
@@ -300,34 +395,14 @@ function initSidebar() {
   setSidebarCollapsed(shouldCollapse);
 
   sidebarToggle.addEventListener("click", () => {
+    if (isPhoneViewport()) {
+      closeMobileDrawer();
+      return;
+    }
     const collapsed = !document.body.classList.contains("sidebar-collapsed");
     setSidebarCollapsed(collapsed);
     window.localStorage.setItem(storageKey, String(collapsed));
   });
-}
-
-async function loadRefreshStatus() {
-  if (!refreshStatus) return;
-  try {
-    const data = await fetchJson("/api/refresh-status");
-    refreshStatus.classList.toggle("is-updating", Boolean(data.updating));
-    if (data.updating) {
-      refreshStatus.textContent = "Updating sources...";
-      return;
-    }
-    const latest = formatDate(data.latest_ingested_at);
-    const next = formatDate(data.next_check_at);
-    if (latest && next) {
-      refreshStatus.textContent = `Last update ${latest}. Next check ${next}.`;
-    } else if (latest) {
-      refreshStatus.textContent = `Last update ${latest}. Automatic updates enabled.`;
-    } else {
-      refreshStatus.textContent = "Waiting for first automatic update.";
-    }
-  } catch (error) {
-    refreshStatus.classList.add("is-updating");
-    refreshStatus.textContent = "Automatic update status unavailable.";
-  }
 }
 
 function renderStats(data) {
@@ -925,6 +1000,7 @@ function initMultiSelects() {
 }
 
 filters.addEventListener("change", () => {
+  syncDateMode();
   loadAll();
   loadSuggestions();
 });
@@ -939,6 +1015,8 @@ navButtons.forEach((button) => {
       loadDailyBriefs();
     } else if (target === "favorites") {
       loadFavorites();
+    } else if (target === "more") {
+      setViewMode("more");
     } else {
       loadSystemStatus();
     }
@@ -946,11 +1024,17 @@ navButtons.forEach((button) => {
 });
 search.addEventListener("input", () => {
   if (state.view !== "today") return;
-  state.query = search.value.trim();
+  const draftQuery = search.value.trim();
   window.clearTimeout(search._timer);
+  if (!draftQuery && state.query) {
+    state.query = "";
+    suggestions.hidden = true;
+    suggestions.innerHTML = "";
+    loadAll();
+    return;
+  }
   search._timer = window.setTimeout(() => {
     loadSuggestions();
-    loadAll();
   }, 250);
 });
 search.addEventListener("keydown", (event) => {
@@ -973,11 +1057,15 @@ document.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && mediaModal && !mediaModal.hidden) {
     closeMediaModal();
   }
+  if (event.key === "Escape" && document.body.classList.contains("mobile-drawer-open")) {
+    closeMobileDrawer();
+  }
 });
 
+initTheme();
 initSidebar();
+initMobileShell();
 initMultiSelects();
+syncDateMode();
 loadAll();
-loadRefreshStatus();
-window.setInterval(loadRefreshStatus, 30000);
 window.setInterval(loadAll, 300000);
