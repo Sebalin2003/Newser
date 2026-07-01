@@ -4,6 +4,7 @@ const state = {
   view: "today",
   language: window.localStorage.getItem("newser.language") === "en" ? "en" : "es",
   sourcePreferences: {},
+  appliedSourcePreferences: {},
 };
 
 const I18N = {
@@ -13,16 +14,11 @@ const I18N = {
     "sidebar.expand": "Expandir barra lateral",
     "nav.main": "Navegación principal",
     "nav.workspace": "Espacio de trabajo",
-    "nav.modes": "3 modos",
     "nav.today": "Actualizaciones de hoy",
     "nav.todayShort": "Actualizaciones",
-    "nav.todayDesc": "Artículos, repositorios, temas y búsqueda en vivo.",
     "nav.briefs": "Briefs diarios",
-    "nav.briefsDesc": "Resumen ejecutivo de hoy y últimos 7 días.",
     "nav.favorites": "Favoritos",
-    "nav.favoritesDesc": "Artículos y repositorios guardados.",
     "nav.sources": "Fuentes",
-    "nav.sourcesDesc": "Preferencias para filtros y ranking.",
     "nav.more": "Más",
     "filters.title": "Controles del feed",
     "filters.date": "Fecha",
@@ -39,8 +35,6 @@ const I18N = {
     "prefs.title": "Preferencias",
     "prefs.language": "Idioma",
     "prefs.appearance": "Apariencia",
-    "prefs.switchTheme": "Cambiar tema",
-    "prefs.themeDesc": "Cambiar entre modo oscuro y claro.",
     "theme.toLight": "Cambiar a modo claro",
     "theme.toDark": "Cambiar a modo oscuro",
     "theme.light": "Claro",
@@ -51,8 +45,7 @@ const I18N = {
     "mobile.briefs": "Briefs",
     "mobile.saved": "Guardados",
     "mobile.more": "Más",
-    "mobile.content": "Contenido",
-    "search.placeholder": "Buscar en el corpus",
+    "search.placeholder": "Buscar",
     "search.clear": "Limpiar búsqueda",
     "search.results": "Resultados de búsqueda",
     "status.loadingSearch": "Cargando resultados de búsqueda...",
@@ -72,7 +65,6 @@ const I18N = {
     "brief.loading": "Cargando brief...",
     "brief.archive": "Archivo",
     "brief.previous": "Briefs diarios anteriores",
-    "brief.subtitle": "Todas las mañanas a las 8",
     "brief.generating": "El brief de hoy se está generando. Actualizá esta sección en un momento.",
     "brief.missing": "Todavía no hay brief diario disponible para esta fecha.",
     "brief.noPreviousTitle": "No se encontraron briefs diarios anteriores",
@@ -110,45 +102,8 @@ const I18N = {
     "favorites.emptyTitle": "Todavía no hay favoritos",
     "favorites.emptyBody": "Usá el botón de corazón en cualquier artículo para guardarlo acá.",
     "favorites.loadError": "No se pudieron cargar los favoritos:",
-    "system.status": "Estado del sistema",
-    "system.open": "Abrir estado del sistema",
-    "system.openDesc": "Salud, métricas y cobertura de fuentes.",
-    "system.mobileDesc": "Salud de actualización, métricas y fuentes.",
-    "system.operations": "Resumen operativo",
-    "system.description": "Salud de actualización automática, cobertura del corpus y distribución de fuentes.",
-    "system.checking": "Comprobando...",
-    "system.health": "Salud",
-    "system.updates": "Actualizaciones automáticas",
-    "system.metrics": "Métricas",
-    "system.corpus": "Resumen del corpus",
-    "system.sources": "Fuentes",
-    "system.sourceBreakdown": "Distribución por fuente",
-    "system.updating": "Actualizando",
-    "system.needsAttention": "Requiere atención",
-    "system.stale": "Desactualizado",
-    "system.healthy": "Saludable",
-    "system.updateState": "Estado de actualización",
-    "system.updatingSources": "Actualizando fuentes",
-    "system.idle": "En espera",
-    "system.freshness": "Frescura",
-    "system.fresh": "Reciente",
-    "system.lastUpdate": "Última actualización",
-    "system.noUpdate": "Sin actualizaciones todavía",
-    "system.nextCheck": "Próxima comprobación",
-    "system.notScheduled": "No programada",
-    "system.interval": "Intervalo",
-    "system.minutes": "minutos",
-    "system.lastError": "Último error",
-    "system.none": "Ninguno",
-    "system.noSources": "Todavía no hay datos de fuentes disponibles.",
-    "system.items": "items",
-    "system.unavailable": "No disponible",
-    "system.loadError": "No se pudo cargar el estado del sistema:",
     "source.fallback": "Fuente",
-    "sources.kicker": "Preferencias",
     "sources.title": "Fuentes",
-    "sources.description": "Guardá qué fuentes priorizar u ocultar. El filtro actual sigue disponible para ajustes temporales.",
-    "sources.mobileDesc": "Preferencias guardadas para filtros y ranking.",
     "sources.apply": "Aplicar",
     "sources.applied": "Aplicado",
     "sources.reset": "Restablecer",
@@ -179,16 +134,11 @@ const I18N = {
     "sidebar.expand": "Expand sidebar",
     "nav.main": "Main navigation",
     "nav.workspace": "Workspace",
-    "nav.modes": "3 modes",
     "nav.today": "Today's Updates",
     "nav.todayShort": "Updates",
-    "nav.todayDesc": "Live articles, repositories, topics, and search.",
     "nav.briefs": "Daily Briefs",
-    "nav.briefsDesc": "Today's executive summary and previous 7 days.",
     "nav.favorites": "Favorites",
-    "nav.favoritesDesc": "Saved articles and repositories.",
     "nav.sources": "Sources",
-    "nav.sourcesDesc": "Preferences for filters and ranking.",
     "nav.more": "More",
     "filters.title": "Feed controls",
     "filters.date": "Date",
@@ -205,8 +155,6 @@ const I18N = {
     "prefs.title": "Preferences",
     "prefs.language": "Language",
     "prefs.appearance": "Appearance",
-    "prefs.switchTheme": "Switch theme",
-    "prefs.themeDesc": "Switch between dark and light mode.",
     "theme.toLight": "Switch to light mode",
     "theme.toDark": "Switch to dark mode",
     "theme.light": "Light",
@@ -217,8 +165,7 @@ const I18N = {
     "mobile.briefs": "Briefs",
     "mobile.saved": "Saved",
     "mobile.more": "More",
-    "mobile.content": "Content",
-    "search.placeholder": "Search corpus",
+    "search.placeholder": "Search",
     "search.clear": "Clear search",
     "search.results": "Search results",
     "status.loadingSearch": "Loading search results...",
@@ -238,7 +185,6 @@ const I18N = {
     "brief.loading": "Loading brief...",
     "brief.archive": "Archive",
     "brief.previous": "Previous daily briefs",
-    "brief.subtitle": "Every morning at 8 o'clock",
     "brief.generating": "Today's brief is being generated. Refresh this section in a moment.",
     "brief.missing": "No daily brief is available for this date yet.",
     "brief.noPreviousTitle": "No previous daily briefs found",
@@ -276,45 +222,8 @@ const I18N = {
     "favorites.emptyTitle": "No favorites yet",
     "favorites.emptyBody": "Use the heart button on any article to save it here for follow-up.",
     "favorites.loadError": "Favorites could not be loaded:",
-    "system.status": "System Status",
-    "system.open": "Open System Status",
-    "system.openDesc": "Health, metrics, and source coverage.",
-    "system.mobileDesc": "Update health, metrics, and sources.",
-    "system.operations": "Operations overview",
-    "system.description": "Automatic update health, corpus coverage, and source distribution.",
-    "system.checking": "Checking...",
-    "system.health": "Health",
-    "system.updates": "Automatic updates",
-    "system.metrics": "Metrics",
-    "system.corpus": "Corpus summary",
-    "system.sources": "Sources",
-    "system.sourceBreakdown": "Source breakdown",
-    "system.updating": "Updating",
-    "system.needsAttention": "Needs attention",
-    "system.stale": "Stale",
-    "system.healthy": "Healthy",
-    "system.updateState": "Update state",
-    "system.updatingSources": "Updating sources",
-    "system.idle": "Idle",
-    "system.freshness": "Freshness",
-    "system.fresh": "Fresh",
-    "system.lastUpdate": "Last update",
-    "system.noUpdate": "No update yet",
-    "system.nextCheck": "Next check",
-    "system.notScheduled": "Not scheduled",
-    "system.interval": "Interval",
-    "system.minutes": "minutes",
-    "system.lastError": "Last error",
-    "system.none": "None",
-    "system.noSources": "No source data is available yet.",
-    "system.items": "items",
-    "system.unavailable": "Unavailable",
-    "system.loadError": "System status could not be loaded:",
     "source.fallback": "Source",
-    "sources.kicker": "Preferences",
     "sources.title": "Sources",
-    "sources.description": "Save which sources to prioritize or hide. The current filter remains available for temporary changes.",
-    "sources.mobileDesc": "Saved preferences for filters and ranking.",
     "sources.apply": "Apply",
     "sources.applied": "Applied",
     "sources.reset": "Reset sources",
@@ -357,7 +266,6 @@ const feedMeta = document.querySelector("#feed-meta");
 const topbarTitle = document.querySelector(".topbar h2");
 const topbarTitleMain = document.querySelector("#topbar-title-main");
 const topbarDate = document.querySelector("#topbar-date");
-const topbarSubtitle = document.querySelector("#topbar-subtitle");
 const allDatesToggle = document.querySelector("[data-all-dates]");
 const dateModeLabel = document.querySelector("[data-date-mode-label]");
 const stats = document.querySelector("#stats");
@@ -473,13 +381,38 @@ function renderSourcePreferenceControls() {
   });
 }
 
+function visibleMultiSelectOptions(root) {
+  return Array.from(root.querySelectorAll('input[name="fuentes"], input[name="areas"]'))
+    .filter((input) => !input.disabled && !input.closest("[hidden]"));
+}
+
 function sourceFilterRoot() {
   return sourceInputs()[0]?.closest("[data-multiselect]") || null;
 }
 
-function applySourcePreferencesToFilters() {
+function syncSourceFilterVisibility() {
   sourceInputs().forEach((input) => {
-    input.checked = state.sourcePreferences[input.value] !== "hidden";
+    const hidden = state.appliedSourcePreferences[input.value] === "hidden";
+    const wasHidden = input.disabled;
+    input.disabled = hidden;
+    if (hidden) {
+      input.checked = false;
+    } else if (wasHidden) {
+      input.checked = true;
+    }
+    const row = input.closest("label");
+    if (row) row.hidden = hidden;
+  });
+  const root = sourceFilterRoot();
+  if (root) syncSelectAll(root);
+}
+
+function applySourcePreferencesToFilters() {
+  state.appliedSourcePreferences = { ...state.sourcePreferences };
+  saveSourcePreferences();
+  syncSourceFilterVisibility();
+  sourceInputs().forEach((input) => {
+    if (!input.disabled) input.checked = true;
   });
   const root = sourceFilterRoot();
   if (root) syncSelectAll(root);
@@ -487,9 +420,10 @@ function applySourcePreferencesToFilters() {
 
 function resetSourcePreferences() {
   state.sourcePreferences = defaultSourcePreferences();
+  state.appliedSourcePreferences = { ...state.sourcePreferences };
   saveSourcePreferences();
   renderSourcePreferenceControls();
-  applySourcePreferencesToFilters();
+  syncSourceFilterVisibility();
 }
 
 function showSourceApplyFeedback(button) {
@@ -507,21 +441,21 @@ function showSourceApplyFeedback(button) {
 
 function checkedPrioritizedSources() {
   return sourceInputs()
-    .filter((input) => input.checked && state.sourcePreferences[input.value] === "prioritized")
+    .filter((input) => !input.disabled && input.checked && state.appliedSourcePreferences[input.value] === "prioritized")
     .map((input) => input.value);
 }
 
 function initSourcePreferences() {
   state.sourcePreferences = loadSourcePreferences();
+  state.appliedSourcePreferences = { ...state.sourcePreferences };
   renderSourcePreferenceControls();
-  applySourcePreferencesToFilters();
+  syncSourceFilterVisibility();
   sourcePreferenceButtons.forEach((button) => {
     button.addEventListener("click", () => {
       const source = button.dataset.sourcePreference || "";
       const value = button.dataset.sourceValue || "normal";
       if (!source || !SOURCE_PREFERENCE_VALUES.has(value)) return;
       state.sourcePreferences[source] = value;
-      saveSourcePreferences();
       renderSourcePreferenceControls();
     });
   });
@@ -530,10 +464,14 @@ function initSourcePreferences() {
       if (button.dataset.sourceAction === "reset") {
         resetSourcePreferences();
         setStatus(i18n("status.sourcesReset"));
+        loadAll();
+        loadSuggestions();
       } else {
         applySourcePreferencesToFilters();
         setStatus(i18n("status.sourcesApplied"));
         showSourceApplyFeedback(button);
+        loadAll();
+        loadSuggestions();
       }
     });
   });
@@ -638,10 +576,6 @@ function updateTopbarTitle() {
   }
 
   if (!topbarDate) return;
-  if (topbarSubtitle) {
-    topbarSubtitle.hidden = !briefsActive;
-    topbarSubtitle.textContent = briefsActive ? i18n("brief.subtitle") : "";
-  }
   const dateInput = filters.querySelector('input[name="fecha"]');
   const allDates = Boolean(allDatesToggle?.checked);
   const selectedDate = dateInput?.value || "";
@@ -1344,12 +1278,15 @@ async function loadSuggestions() {
 
 function updateMultiSelectLabel(root) {
   const label = root.querySelector("[data-label]");
-  const options = Array.from(root.querySelectorAll('input[name="fuentes"], input[name="areas"]'));
+  const allOptions = Array.from(root.querySelectorAll('input[name="fuentes"], input[name="areas"]'));
+  const options = visibleMultiSelectOptions(root);
   const selected = options.filter((input) => input.checked);
-  const isSources = options[0]?.name === "fuentes";
+  const isSources = allOptions[0]?.name === "fuentes";
   const type = isSources ? i18n("filters.sources") : i18n("filters.areas");
   if (!label) return;
-  if (selected.length === options.length) {
+  if (!options.length) {
+    label.textContent = `0 ${type}`;
+  } else if (selected.length === options.length) {
     label.textContent = isSources ? i18n("filters.allSources") : i18n("filters.allAreas");
   } else if (selected.length === 1) {
     label.textContent = selected[0].nextElementSibling?.textContent || `1 ${type}`;
@@ -1364,8 +1301,14 @@ function updateMultiSelectLabels() {
 
 function syncSelectAll(root) {
   const selectAll = root.querySelector("[data-select-all]");
-  const options = Array.from(root.querySelectorAll('input[name="fuentes"], input[name="areas"]'));
-  if (!selectAll || !options.length) return;
+  const options = visibleMultiSelectOptions(root);
+  if (!selectAll) return;
+  if (!options.length) {
+    selectAll.checked = false;
+    selectAll.indeterminate = false;
+    updateMultiSelectLabel(root);
+    return;
+  }
   const checkedCount = options.filter((input) => input.checked).length;
   selectAll.checked = checkedCount === options.length;
   selectAll.indeterminate = checkedCount > 0 && checkedCount < options.length;
@@ -1385,7 +1328,7 @@ function initMultiSelects() {
     });
 
     selectAll.addEventListener("change", () => {
-      options.forEach((input) => {
+      visibleMultiSelectOptions(root).forEach((input) => {
         input.checked = selectAll.checked;
       });
       syncSelectAll(root);

@@ -10,7 +10,7 @@
     document.documentElement.dataset.theme = localStorage.getItem("newser.theme") || "dark";
     document.documentElement.lang = localStorage.getItem("newser.language") || "es";
   </script>
-  <link rel="stylesheet" href="/static/app.css?v=lang-v1">
+  <link rel="stylesheet" href="/static/app.css?v=source-selected-v4">
 </head>
 <body>
   <aside class="sidebar">
@@ -29,7 +29,6 @@
     <nav class="sidebar-section mode-nav" aria-label="Navegación principal" data-i18n-aria-label="nav.main">
       <div class="sidebar-section-head">
         <p class="eyebrow" data-i18n="nav.workspace">Espacio de trabajo</p>
-        <span data-i18n="nav.modes">3 modos</span>
       </div>
       <button type="button" class="nav-button active" data-view-target="today" aria-label="Actualizaciones de hoy" data-i18n-aria-label="nav.today">
         <span class="nav-icon" aria-hidden="true">
@@ -42,7 +41,6 @@
         </span>
         <span>
           <strong data-i18n="nav.today">Actualizaciones de hoy</strong>
-          <small data-i18n="nav.todayDesc">Artículos, repositorios, temas y búsqueda en vivo.</small>
         </span>
       </button>
       <button type="button" class="nav-button" data-view-target="briefs" aria-label="Briefs diarios" data-i18n-aria-label="nav.briefs">
@@ -58,7 +56,6 @@
         </span>
         <span>
           <strong data-i18n="nav.briefs">Briefs diarios</strong>
-          <small data-i18n="nav.briefsDesc">Resumen ejecutivo de hoy y últimos 7 días.</small>
         </span>
       </button>
       <button type="button" class="nav-button" data-view-target="favorites" aria-label="Favoritos" data-i18n-aria-label="nav.favorites">
@@ -69,7 +66,6 @@
         </span>
         <span>
           <strong data-i18n="nav.favorites">Favoritos</strong>
-          <small data-i18n="nav.favoritesDesc">Artículos y repositorios guardados.</small>
         </span>
       </button>
     </nav>
@@ -148,7 +144,6 @@
       <button type="button" class="preference-nav-button" data-view-target="sources" aria-label="Fuentes" data-i18n-aria-label="nav.sources">
         <span>
           <strong data-i18n="nav.sources">Fuentes</strong>
-          <small data-i18n="sources.mobileDesc">Preferencias guardadas para filtros y ranking.</small>
         </span>
         <span aria-hidden="true">&rsaquo;</span>
       </button>
@@ -168,7 +163,6 @@
         </span>
         <span class="sidebar-theme-copy">
           <strong data-i18n="prefs.appearance">Apariencia</strong>
-          <small data-i18n="prefs.switchTheme">Cambiar tema</small>
         </span>
       </button>
     </div>
@@ -194,10 +188,9 @@
           <span id="topbar-title-main">Actualizaciones de hoy</span>
           <span id="topbar-date" class="topbar-date" hidden></span>
         </h2>
-        <p id="topbar-subtitle" class="topbar-subtitle" hidden></p>
       </div>
       <div class="search today-only">
-        <input id="search" type="text" placeholder="Buscar en el corpus" data-i18n-placeholder="search.placeholder" autocomplete="off">
+        <input id="search" type="text" placeholder="Buscar" data-i18n-placeholder="search.placeholder" autocomplete="off">
         <button id="clear-search" type="button" title="Limpiar búsqueda" data-i18n-title="search.clear">x</button>
         <div id="suggestions" class="suggestions" hidden></div>
       </div>
@@ -248,7 +241,6 @@
           <button type="button" data-view-target="sources">
             <span>
               <strong data-i18n="nav.sources">Fuentes</strong>
-              <small data-i18n="sources.mobileDesc">Preferencias guardadas para filtros y ranking.</small>
             </span>
             <span aria-hidden="true">&rsaquo;</span>
           </button>
@@ -277,11 +269,6 @@
 
     <section id="source-preferences" class="source-preferences-view" hidden>
       <div class="source-preferences-hero">
-        <div>
-          <p class="eyebrow" data-i18n="sources.kicker">Preferencias</p>
-          <h3 data-i18n="sources.title">Fuentes</h3>
-          <p data-i18n="sources.description">Guardá qué fuentes priorizar u ocultar. El filtro actual sigue disponible para ajustes temporales.</p>
-        </div>
         <div class="source-preferences-actions">
           <button type="button" class="source-apply-button" data-source-action="apply">
             <span class="source-apply-icon" aria-hidden="true">
@@ -355,6 +342,6 @@
     <img id="media-modal-image" alt="">
   </div>
 
-  <script src="/static/app.js?v=lang-v1"></script>
+  <script src="/static/app.js?v=search-placeholder-v2"></script>
 </body>
 </html>
