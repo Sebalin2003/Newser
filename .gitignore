@@ -43,10 +43,6 @@ logs/
 .agents/
 ui-verification/
 
-# --- Streamlit ---
-.streamlit/*
-!.streamlit/config.toml
-
 # --- OS ---
 .DS_Store
 Thumbs.db
