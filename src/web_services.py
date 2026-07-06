@@ -31,7 +31,7 @@ load_dotenv()
 
 CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.yaml"
 BRIEF_TIMEZONE = ZoneInfo("America/Argentina/Buenos_Aires")
-FILTER_WINDOW_DAYS = 7
+FILTER_WINDOW_DAYS = 30
 FEED_REFRESH_INTERVAL = timedelta(minutes=30)
 DAILY_BRIEF_HOUR = 8
 HOT_TOPIC_MIN_SOURCES = 3
@@ -405,7 +405,7 @@ def get_feed(
     cutoff = datetime.now(timezone.utc) - timedelta(days=FILTER_WINDOW_DAYS)
 
     with get_session() as session:
-        query = session.query(Noticia)
+        query = session.query(Noticia).filter(Noticia.fecha_ingesta >= cutoff)
         if query_text:
             pattern = f"%{query_text}%"
             query = query.filter(
@@ -416,8 +416,6 @@ def get_feed(
                     Noticia.resumen_ia_en.ilike(pattern),
                 )
             )
-        elif not all_dates:
-            query = query.filter(Noticia.fecha_ingesta >= cutoff)
         if source_filter:
             query = query.filter(Noticia.fuente.in_(source_filter))
         if area_filter:
@@ -496,7 +494,7 @@ def _run_daily_brief_catchup() -> None:
     _daily_brief_state["last_started_at"] = datetime.now(timezone.utc)
     _daily_brief_state["last_error"] = None
     try:
-        generate_daily_brief_job()
+        generate_daily_brief_catchup_job()
     except Exception as exc:
         _daily_brief_state["last_error"] = str(exc)
     finally:
@@ -540,7 +538,7 @@ def get_past_daily_briefs(today: date | None = None, lang: str | None = None) ->
     selected_lang = normalize_language(lang)
     current = today or datetime.now(BRIEF_TIMEZONE).date()
     newest = current - timedelta(days=1)
-    oldest = current - timedelta(days=7)
+    oldest = current - timedelta(days=30)
     with get_session() as session:
         rows = (
             session.query(MacroResumen)
@@ -704,6 +702,13 @@ def generate_daily_brief_job() -> dict[str, Any]:
     from src.processor import ejecutar_procesamiento
 
     return ejecutar_procesamiento()
+
+
+def generate_daily_brief_catchup_job() -> dict[str, Any]:
+    """Generate a missing brief from already-ingested items for user-facing catch-up."""
+    from src.processor import generar_macro_resumen_dia
+
+    return generar_macro_resumen_dia(load_config())
 
 
 def enrich_missing_media(limit: int = 20, timeout: int = 4) -> int:

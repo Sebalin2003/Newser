@@ -58,6 +58,7 @@ class WebServiceTestCase(unittest.TestCase):
         media_type: str | None = None,
         summary: str = "Resumen no disponible",
         summary_en: str | None = None,
+        ingested_at: datetime | None = None,
     ) -> None:
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
@@ -72,7 +73,7 @@ class WebServiceTestCase(unittest.TestCase):
                     resumen_ia_en=summary_en,
                     area_matcheada=area,
                     fecha_publicacion=published_at or now,
-                    fecha_ingesta=now,
+                    fecha_ingesta=ingested_at or now,
                     selected_score=score,
                     tags_json=json.dumps(["agents"]),
                     media_url=media_url,
@@ -101,6 +102,14 @@ class WebServiceTestCase(unittest.TestCase):
                 )
             )
             session.commit()
+
+    def test_date_bounds_cover_thirty_day_display_window(self) -> None:
+        today = date(2026, 6, 25)
+
+        self.assertEqual(web_services.date_bounds(today), (date(2026, 5, 27), today))
+        self.assertEqual(web_services.parse_filter_date("2026-05-27", today), date(2026, 5, 27))
+        self.assertEqual(web_services.parse_filter_date("2026-05-26", today), today)
+        self.assertEqual(web_services.parse_filter_date("invalid", today), today)
 
     def test_feed_filters_by_source_area_date_query_and_score_order(self) -> None:
         today = datetime.now(timezone.utc).date().isoformat()
@@ -134,9 +143,11 @@ class WebServiceTestCase(unittest.TestCase):
         self.assertEqual(result["items"][0]["selected_score"], 88)
         self.assertEqual(result["items"][1]["source_preference"], "normal")
 
-    def test_feed_all_dates_disables_date_filter(self) -> None:
+    def test_feed_all_dates_disables_date_filter_over_thirty_day_window(self) -> None:
         today = datetime.now(web_services.BRIEF_TIMEZONE).date()
         yesterday = today - timedelta(days=1)
+        day_29 = today - timedelta(days=29)
+        day_30 = today - timedelta(days=30)
         self.add_article(
             "today",
             "Agent runtime today",
@@ -153,12 +164,30 @@ class WebServiceTestCase(unittest.TestCase):
             80,
             published_at=datetime(yesterday.year, yesterday.month, yesterday.day, 15, tzinfo=timezone.utc),
         )
+        self.add_article(
+            "day-29",
+            "Agent runtime day 29",
+            "OpenAI Blog",
+            "ai_agents",
+            70,
+            published_at=datetime(day_29.year, day_29.month, day_29.day, 15, tzinfo=timezone.utc),
+            ingested_at=datetime.now(timezone.utc) - timedelta(days=29),
+        )
+        self.add_article(
+            "day-30",
+            "Agent runtime day 30",
+            "OpenAI Blog",
+            "ai_agents",
+            99,
+            published_at=datetime(day_30.year, day_30.month, day_30.day, 15, tzinfo=timezone.utc),
+            ingested_at=datetime.now(timezone.utc) - timedelta(days=31),
+        )
 
         today_result = web_services.get_feed(fecha=today.isoformat(), fuentes=["OpenAI Blog"])
         all_result = web_services.get_feed(fecha="all", fuentes=["OpenAI Blog"])
 
         self.assertEqual([item["id"] for item in today_result["items"]], ["today"])
-        self.assertEqual([item["id"] for item in all_result["items"]], ["today", "yesterday"])
+        self.assertEqual([item["id"] for item in all_result["items"]], ["today", "yesterday", "day-29"])
         self.assertEqual(all_result["fecha"], "all")
         self.assertEqual(all_result["hot_topics"], [])
 
@@ -363,17 +392,40 @@ class WebServiceTestCase(unittest.TestCase):
         self.assertEqual(english["reason"], "Article not found.")
 
     def test_suggestions_require_two_characters_and_limit_results(self) -> None:
-        today = datetime.now(web_services.BRIEF_TIMEZONE).date().isoformat()
+        today_date = datetime.now(web_services.BRIEF_TIMEZONE).date()
+        today = today_date.isoformat()
+        day_29 = today_date - timedelta(days=29)
+        day_31 = today_date - timedelta(days=31)
         for index, score in enumerate([10, 80, 60, 70, 90, 50]):
             self.add_article(f"item-{index}", f"Agent story {index}", "GitHub Blog", "ai_agents", score)
+        self.add_article(
+            "older-window-item",
+            "Agent story older window",
+            "GitHub Blog",
+            "ai_agents",
+            65,
+            published_at=datetime(day_29.year, day_29.month, day_29.day, 15, tzinfo=timezone.utc),
+            ingested_at=datetime.now(timezone.utc) - timedelta(days=29),
+        )
+        self.add_article(
+            "outside-window-item",
+            "Agent story outside window",
+            "GitHub Blog",
+            "ai_agents",
+            100,
+            published_at=datetime(day_31.year, day_31.month, day_31.day, 15, tzinfo=timezone.utc),
+            ingested_at=datetime.now(timezone.utc) - timedelta(days=31),
+        )
 
         self.assertEqual(web_services.get_suggestions("a"), [])
 
         with patch.object(web_services, "parse_filter_date", return_value=date.fromisoformat(today)):
             suggestions = web_services.get_suggestions("agent")
+        all_date_suggestions = web_services.get_suggestions("older", fecha="all")
 
         self.assertEqual(len(suggestions), 5)
         self.assertEqual([item["score"] for item in suggestions], [90.0, 80.0, 70.0, 60.0, 50.0])
+        self.assertEqual([item["id"] for item in all_date_suggestions], ["older-window-item"])
 
     def test_feed_staleness_uses_thirty_minute_threshold(self) -> None:
         now = datetime.now(timezone.utc)
@@ -389,16 +441,16 @@ class WebServiceTestCase(unittest.TestCase):
         with patch.object(web_services, "is_feed_stale", return_value=True):
             self.assertFalse(web_services.ensure_feed_refresh(background=True))
 
-    def test_past_daily_briefs_use_previous_seven_days_newest_first(self) -> None:
+    def test_past_daily_briefs_use_previous_thirty_days_newest_first(self) -> None:
         today = date(2026, 6, 25)
         self.add_brief(today, "today")
         self.add_brief(today - timedelta(days=1), "yesterday", {"intro": "Yesterday", "items": []})
-        self.add_brief(today - timedelta(days=7), "day seven")
-        self.add_brief(today - timedelta(days=8), "too old")
+        self.add_brief(today - timedelta(days=30), "day thirty")
+        self.add_brief(today - timedelta(days=31), "too old")
 
         result = web_services.get_past_daily_briefs(today)
 
-        self.assertEqual([item["fecha"] for item in result["items"]], ["2026-06-24", "2026-06-18"])
+        self.assertEqual([item["fecha"] for item in result["items"]], ["2026-06-24", "2026-05-26"])
         self.assertEqual(result["items"][0]["brief_json"], {"intro": "Yesterday", "items": []})
         self.assertIsNone(result["items"][1]["brief_json"])
 
@@ -417,7 +469,7 @@ class WebServiceTestCase(unittest.TestCase):
     def test_daily_brief_catchup_uses_existing_generation_path_once(self) -> None:
         with (
             patch.object(web_services, "should_catch_up_daily_brief", return_value=True),
-            patch.object(web_services, "generate_daily_brief_job", return_value={"ok": True}) as generate,
+            patch.object(web_services, "generate_daily_brief_catchup_job", return_value={"ok": True}) as generate,
         ):
             self.assertTrue(web_services.ensure_daily_brief_catchup(background=False))
             generate.assert_called_once()
@@ -752,6 +804,10 @@ class WebUiStaticTests(unittest.TestCase):
         self.assertNotIn("Artículos, repositorios, temas y búsqueda en vivo.", workspace_nav)
         self.assertNotIn("Resumen ejecutivo de hoy y últimos 7 días.", workspace_nav)
         self.assertNotIn("Artículos y repositorios guardados.", workspace_nav)
+        self.assertIn("últimos 30 días", script)
+        self.assertIn("previous 30 days", script)
+        self.assertNotIn("últimos 7 días", script)
+        self.assertNotIn("previous 7 days", script)
         self.assertIn("loadDailyBriefs", script)
         self.assertIn("loadFavorites", script)
         self.assertIn('fetchJson(withLanguage("/api/brief"))', script)
@@ -785,8 +841,11 @@ class WebUiStaticTests(unittest.TestCase):
         self.assertIn("Usá el botón de corazón", script)
         self.assertNotIn("Saved to favorites.", script)
         self.assertNotIn("Removed from favorites.", script)
-        self.assertIn("/static/app.js?v=search-placeholder-v2", template)
-        self.assertIn("/static/app.css?v=source-selected-v4", template)
+        self.assertIn("/static/app.js?v=thirty-day-window-v1", template)
+        self.assertIn("/static/app.css?v=final-polish-v1", template)
+        self.assertIn('placeholder="Buscar"', template)
+        self.assertIn('"search.placeholder": "Buscar"', script)
+        self.assertIn('"search.placeholder": "Search"', script)
         self.assertIn('id="desktop-theme-toggle"', template)
         self.assertNotIn('id="mobile-theme-toggle"', template)
         self.assertIn('aria-label="Cambiar a modo claro"', template)
@@ -889,7 +948,7 @@ class WebUiStaticTests(unittest.TestCase):
         self.assertNotIn("Cambiar tema", preferences_section)
         self.assertIn('data-view-target="sources"', template)
         self.assertIn('id="source-preferences"', template)
-        self.assertIn("/static/app.css?v=source-selected-v4", template)
+        self.assertIn("/static/app.css?v=final-polish-v1", template)
         source_preferences = template.split('id="source-preferences"', maxsplit=1)[1].split("</section>", maxsplit=1)[0]
         self.assertNotIn('data-i18n="sources.kicker"', source_preferences)
         self.assertNotIn('data-i18n="sources.title"', source_preferences)
@@ -943,6 +1002,9 @@ class WebUiStaticTests(unittest.TestCase):
         self.assertIn('button[data-source-value="hidden"][aria-pressed="true"]', styles)
         self.assertIn("--source-priority-bg", styles)
         self.assertIn("--source-hidden-bg", styles)
+        self.assertIn("--radius-sm: 8px", styles)
+        self.assertIn("--radius-md: 10px", styles)
+        self.assertIn("--control-height: 40px", styles)
         self.assertNotIn('button[aria-pressed="true"]::before', styles)
         self.assertNotIn("--source-priority-tint", styles)
         self.assertNotIn("--source-priority-muted", styles)
@@ -1035,6 +1097,7 @@ class WebUiStaticTests(unittest.TestCase):
 
         self.assertIn('class="mobile-appbar"', template)
         self.assertIn('id="mobile-menu-toggle"', template)
+        self.assertNotIn('id="mobile-view-label"', template)
         self.assertNotIn('id="mobile-theme-toggle"', template)
         self.assertIn('id="mobile-drawer-backdrop"', template)
         self.assertIn('class="mobile-tabbar"', template)
@@ -1066,6 +1129,8 @@ class WebUiStaticTests(unittest.TestCase):
         self.assertIn("function closeMobileDrawer()", script)
         self.assertIn('window.matchMedia("(max-width: 900px)")', script)
         self.assertIn("mobileMenuToggle.hidden = !todayActive", script)
+        self.assertNotIn("mobileViewLabel", script)
+        self.assertNotIn('"nav.todayShort"', script)
         self.assertNotIn("data-mobile-open-drawer", script)
         self.assertIn('state.view === "more"', script)
         self.assertIn("view-more", script)
@@ -1104,11 +1169,14 @@ class WebUiStaticTests(unittest.TestCase):
         self.assertIn("function renderTitleLabel", script)
         self.assertIn("function splitStarTitle", script)
         self.assertIn("function renderStarCount", script)
+        self.assertIn("function formatScore", script)
         self.assertIn("github-star-count", script)
         self.assertIn("<svg viewBox", script)
         self.assertIn("article-heading", script)
         self.assertIn("article-visual", script)
         self.assertIn("article-star-metric", script)
+        self.assertIn("renderTitleLabel(item.title)", script)
+        self.assertIn("formatScore(item.score)", script)
         self.assertIn("topic-title-row", script)
         self.assertIn("topic-star-metric", script)
         self.assertIn("function renderTopic", script)

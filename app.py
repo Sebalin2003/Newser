@@ -115,7 +115,7 @@ LEGACY_AREA_LABEL_KEYS: dict[str, str] = {
 
 FEED_REFRESH_INTERVAL = timedelta(minutes=30)
 BRIEF_TIMEZONE = ZoneInfo("America/Argentina/Buenos_Aires")
-FILTER_WINDOW_DAYS = 7
+FILTER_WINDOW_DAYS = 30
 
 # Mapping área → color badge nativo de Streamlit
 AREA_BADGE_COLOR: dict[str, str] = {

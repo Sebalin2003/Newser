@@ -15,7 +15,6 @@ const I18N = {
     "nav.main": "Navegación principal",
     "nav.workspace": "Espacio de trabajo",
     "nav.today": "Actualizaciones de hoy",
-    "nav.todayShort": "Actualizaciones",
     "nav.briefs": "Briefs diarios",
     "nav.favorites": "Favoritos",
     "nav.sources": "Fuentes",
@@ -68,7 +67,7 @@ const I18N = {
     "brief.generating": "El brief de hoy se está generando. Actualizá esta sección en un momento.",
     "brief.missing": "Todavía no hay brief diario disponible para esta fecha.",
     "brief.noPreviousTitle": "No se encontraron briefs diarios anteriores",
-    "brief.noPreviousBody": "Newser solo muestra aquí briefs guardados de los últimos 7 días. Los días faltantes se omiten.",
+    "brief.noPreviousBody": "Newser solo muestra aquí briefs guardados de los últimos 30 días. Los días faltantes se omiten.",
     "brief.why": "Por qué importa:",
     "brief.trend": "Lectura de tendencias",
     "brief.articles": "artículos",
@@ -135,7 +134,6 @@ const I18N = {
     "nav.main": "Main navigation",
     "nav.workspace": "Workspace",
     "nav.today": "Today's Updates",
-    "nav.todayShort": "Updates",
     "nav.briefs": "Daily Briefs",
     "nav.favorites": "Favorites",
     "nav.sources": "Sources",
@@ -188,7 +186,7 @@ const I18N = {
     "brief.generating": "Today's brief is being generated. Refresh this section in a moment.",
     "brief.missing": "No daily brief is available for this date yet.",
     "brief.noPreviousTitle": "No previous daily briefs found",
-    "brief.noPreviousBody": "Newser only shows stored briefs from the previous 7 days here. Missing days are omitted.",
+    "brief.noPreviousBody": "Newser only shows stored briefs from the previous 30 days here. Missing days are omitted.",
     "brief.why": "Why it matters:",
     "brief.trend": "Trend reading",
     "brief.articles": "articles",
@@ -257,7 +255,6 @@ const themeStateLabels = document.querySelectorAll("[data-theme-state]");
 const languageButtons = document.querySelectorAll("[data-language-option]");
 const mobileMenuToggle = document.querySelector("#mobile-menu-toggle");
 const mobileDrawerBackdrop = document.querySelector("#mobile-drawer-backdrop");
-const mobileViewLabel = document.querySelector("#mobile-view-label");
 const mobileMore = document.querySelector("#mobile-more");
 const navButtons = document.querySelectorAll("[data-view-target]");
 const feed = document.querySelector("#feed");
@@ -507,9 +504,11 @@ function escapeHtml(value) {
 
 function splitStarTitle(value) {
   const text = String(value ?? "");
-  const match = text.match(/^(.*?)(?:\s*⭐\s*([\d,]+))$/);
-  if (!match) return { title: text, stars: "" };
-  return { title: match[1].trim(), stars: match[2] };
+  const starIndex = text.indexOf("⭐");
+  if (starIndex < 0) return { title: text, stars: "" };
+  const stars = text.slice(starIndex + 1).match(/^\s*([\d,]+)/);
+  if (!stars) return { title: text, stars: "" };
+  return { title: text.slice(0, starIndex).trim(), stars: stars[1] };
 }
 
 function renderStarCount(stars) {
@@ -527,6 +526,11 @@ function renderStarCount(stars) {
 function renderTitleLabel(value) {
   const parts = splitStarTitle(value);
   return `${escapeHtml(parts.title)}${parts.stars ? ` ${renderStarCount(parts.stars)}` : ""}`;
+}
+
+function formatScore(value) {
+  const score = Number(value || 0);
+  return Math.round(Number.isFinite(score) ? score : 0).toLocaleString(locale());
 }
 
 function formatDate(value) {
@@ -583,9 +587,6 @@ function updateTopbarTitle() {
   const showDate = state.view === "today" && (allDates || (selectedDate && latestDate && selectedDate !== latestDate));
   topbarDate.hidden = !showDate;
   topbarDate.textContent = allDates ? i18n("date.all") : (showDate ? formatFeedDate(selectedDate) : "");
-  if (mobileViewLabel) {
-    mobileViewLabel.textContent = allDates ? i18n("date.all") : (showDate ? formatFeedDate(selectedDate) : (state.view === "today" ? i18n("nav.todayShort") : title));
-  }
 }
 
 function syncDateMode() {
@@ -1257,8 +1258,8 @@ async function loadSuggestions() {
     suggestions.innerHTML = data.suggestions
       .map((item) => `
         <button type="button" data-title="${escapeHtml(item.title)}">
-          ${escapeHtml(item.title)}
-          <small>${escapeHtml(item.source)} - ${i18n("filters.score").toLowerCase()} ${escapeHtml(item.score)}</small>
+          ${renderTitleLabel(item.title)}
+          <small>${escapeHtml(item.source)} - ${i18n("filters.score").toLowerCase()} ${formatScore(item.score)}</small>
         </button>
       `)
       .join("");

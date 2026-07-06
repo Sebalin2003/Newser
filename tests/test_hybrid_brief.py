@@ -877,8 +877,8 @@ class TestSidebarFilters(unittest.TestCase):
     def test_date_window_defaults_to_today_and_rejects_outside_range(self) -> None:
         today = date(2026, 6, 24)
 
-        self.assertEqual(self.app._filter_date_bounds(today), (date(2026, 6, 18), today))
-        self.assertEqual(self.app._parse_filter_date("2026-06-17", today), today)
+        self.assertEqual(self.app._filter_date_bounds(today), (date(2026, 5, 26), today))
+        self.assertEqual(self.app._parse_filter_date("2026-05-25", today), today)
         self.assertEqual(self.app._parse_filter_date("invalid", today), today)
         self.assertEqual(self.app._parse_filter_date("2026-06-20", today), date(2026, 6, 20))
 
