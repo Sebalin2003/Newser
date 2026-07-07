@@ -7,6 +7,20 @@ from unittest.mock import patch
 
 
 class TestSchema(unittest.TestCase):
+    def test_database_url_normalizes_supabase_postgres_urls(self) -> None:
+        from src.database import engine_kwargs, normalize_database_url
+
+        self.assertEqual(
+            normalize_database_url("postgres://user:pass@example.test/postgres"),
+            "postgresql+psycopg://user:pass@example.test/postgres",
+        )
+        self.assertEqual(
+            normalize_database_url("postgresql://user:pass@example.test/postgres"),
+            "postgresql+psycopg://user:pass@example.test/postgres",
+        )
+        self.assertEqual(engine_kwargs("sqlite:///news_analyzer.db")["connect_args"], {"check_same_thread": False})
+        self.assertTrue(engine_kwargs("postgresql+psycopg://user:pass@example.test/postgres")["pool_pre_ping"])
+
     def test_macro_resumen_has_brief_json_column(self) -> None:
         from sqlalchemy import inspect
 

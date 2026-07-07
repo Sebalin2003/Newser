@@ -6,7 +6,7 @@ Módulo de base de datos.
 
 Responsabilidades:
 - Definir los modelos ORM: Noticia, Tendencia, Cluster, MacroResumen.
-- Gestionar el engine SQLite y las sesiones.
+- Gestionar el engine SQLAlchemy y las sesiones.
 - Proveer migrar_schema() para migraciones aditivas sin pérdida de datos.
 - Exponer get_session() como context manager con commit/rollback automático.
 """
@@ -14,10 +14,12 @@ Responsabilidades:
 from __future__ import annotations
 
 import logging
+import os
 from contextlib import contextmanager
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 from typing import Generator
 
+from dotenv import load_dotenv
 from sqlalchemy import (
     Column,
     Date,
@@ -36,18 +38,42 @@ from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 # Logging
 # ---------------------------------------------------------------------------
 logger = logging.getLogger(__name__)
+load_dotenv()
 
 
 # ---------------------------------------------------------------------------
 # Engine
 # ---------------------------------------------------------------------------
-DATABASE_URL: str = "sqlite:///news_analyzer.db"
+DEFAULT_DATABASE_URL = "sqlite:///news_analyzer.db"
 
-engine = create_engine(
-    DATABASE_URL,
-    connect_args={"check_same_thread": False},
-    echo=False,
+
+def normalize_database_url(database_url: str) -> str:
+    if database_url.startswith("postgres://"):
+        return "postgresql+psycopg://" + database_url.removeprefix("postgres://")
+    if database_url.startswith("postgresql://"):
+        return "postgresql+psycopg://" + database_url.removeprefix("postgresql://")
+    return database_url
+
+
+DATABASE_URL: str = normalize_database_url(
+    os.getenv("DATABASE_URL", DEFAULT_DATABASE_URL).strip() or DEFAULT_DATABASE_URL
 )
+
+
+def is_sqlite_url(database_url: str = DATABASE_URL) -> bool:
+    return database_url.startswith("sqlite")
+
+
+def engine_kwargs(database_url: str = DATABASE_URL) -> dict:
+    kwargs: dict = {"echo": False}
+    if is_sqlite_url(database_url):
+        kwargs["connect_args"] = {"check_same_thread": False}
+    else:
+        kwargs["pool_pre_ping"] = True
+    return kwargs
+
+
+engine = create_engine(DATABASE_URL, **engine_kwargs(DATABASE_URL))
 
 SessionLocal = sessionmaker(
     autocommit=False,
@@ -240,19 +266,22 @@ def limpiar_datos_antiguos(dias_retencion: int = 30) -> dict[str, int]:
         dict con la cantidad de filas eliminadas por tabla.
     """
     resultado = {"noticias_eliminadas": 0, "clusters_eliminados": 0}
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=dias_retencion)).replace(tzinfo=None)
     try:
         with engine.begin() as conn:
             r1 = conn.execute(
                 text(
                     "DELETE FROM noticias "
-                    f"WHERE fecha_ingesta < datetime('now', '-{dias_retencion} days') "
+                    "WHERE fecha_ingesta < :cutoff "
                     "AND COALESCE(is_favorite, 0) = 0"
-                )
+                ),
+                {"cutoff": cutoff},
             )
             resultado["noticias_eliminadas"] = r1.rowcount
 
             r2 = conn.execute(
-                text(f"DELETE FROM clusters WHERE fecha_creacion < datetime('now', '-{dias_retencion} days')")
+                text("DELETE FROM clusters WHERE fecha_creacion < :cutoff"),
+                {"cutoff": cutoff},
             )
             resultado["clusters_eliminados"] = r2.rowcount
 
@@ -271,12 +300,17 @@ def limpiar_datos_antiguos(dias_retencion: int = 30) -> dict[str, int]:
 
 def migrar_schema() -> None:
     """
-    Migración conservadora del schema SQLite.
+    Migración conservadora del schema.
 
     - Crea las tablas nuevas (clusters, macro_resumenes) si no existen.
-    - Agrega columnas nuevas a la tabla 'noticias' sin destruir datos existentes.
+    - En SQLite, agrega columnas nuevas sin destruir datos existentes.
     - Idempotente: detecta columnas existentes antes de ejecutar ALTER TABLE.
     """
+    if not is_sqlite_url():
+        Base.metadata.create_all(bind=engine)
+        logger.info("Schema migrado correctamente.")
+        return
+
     inspector = inspect(engine)
     existing_tables = inspector.get_table_names()
 
