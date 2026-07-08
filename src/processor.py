@@ -23,7 +23,7 @@ import re
 import hashlib
 import string
 from collections import Counter
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
 
@@ -891,13 +891,14 @@ def generar_macro_resumen_dia(
     config: dict,
     progress_callback: Callable[[str], None] = None,
     language: str | None = None,
+    target_date: date | None = None,
 ) -> dict[str, Any]:
     """Genera el MacroResumen del día leyendo noticias directamente (sin clusters)."""
     lang = normalize_language(language)
     if progress_callback:
         progress_callback("Evaluando generación de MacroResumen del día...")
 
-    hoy = datetime.now().date()
+    hoy = target_date or datetime.now().date()
     FALLBACK_BAJO_VOLUMEN = (
         "Low update volume in the market today."
         if lang == "en"
@@ -928,9 +929,10 @@ def generar_macro_resumen_dia(
 
         # Leer noticias directamente — NO clusters
         cutoff = datetime.combine(hoy, datetime.min.time())
+        next_day = cutoff + timedelta(days=1)
         noticias = (
             session.query(Noticia)
-            .filter(Noticia.fecha_ingesta >= cutoff)
+            .filter(Noticia.fecha_ingesta >= cutoff, Noticia.fecha_ingesta < next_day)
             .order_by(Noticia.selected_score.desc(), Noticia.fecha_ingesta.desc())
             .limit(50)  # top 50 más relevantes del día
             .all()
@@ -940,11 +942,12 @@ def generar_macro_resumen_dia(
         if progress_callback:
             progress_callback("Buscando noticias globales IT verificables...")
 
-        try:
-            global_items = fetch_global_news(max_items=10)
-        except Exception as exc:
-            logger.warning("No se pudieron obtener noticias globales: %s", exc)
-            global_items = []
+        global_items = []
+        if hoy == datetime.now().date():
+            try:
+                global_items = fetch_global_news(max_items=10)
+            except Exception as exc:
+                logger.warning("No se pudieron obtener noticias globales: %s", exc)
 
         if n_noticias_hoy < 3 and not global_items:
             _persistir_macro_resumen(

@@ -52,6 +52,7 @@ SOURCE_CREDIBILITY = {
     "OpenAI Blog": 98,
     "GitHub Blog": 94,
     "Reuters": 92,
+    "Hugging Face Blog": 90,
     "Hacker News": 86,
     "GitHub Trending": 84,
 }
@@ -68,7 +69,8 @@ TAG_KEYWORDS = {
     ),
     "Developer Tools": (
         "developer", "programming", "github", "copilot", "ide", "sdk",
-        "api", "framework", "library", "cli", "compiler", "runtime",
+        "api", "framework", "software library", "python library",
+        "javascript library", "cli", "compiler", "runtime",
     ),
     "Cloud": (
         "cloud", "aws", "azure", "google cloud", "kubernetes", "docker",
@@ -122,6 +124,17 @@ def _text_for(item: Any) -> str:
             _get(item, "area_matcheada") or _get(item, "area"),
         )
     ).lower()
+
+
+def _relevance_text_for(item: Any) -> str:
+    text = _text_for(item)
+    source = str(_get(item, "fuente") or _get(item, "source") or "")
+    if source != "GitHub Trending":
+        return text
+    text = re.sub(r"^\s*\[github\]\s*", "", text)
+    text = re.sub(r"\u2b50\s*\d[\d,]*", " ", text)
+    text = re.sub(r"\(\+\d[\d,]*\s+stars?\s+(?:today|this week)\)", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
 
 
 def _parse_period_stars(title: str) -> int:
@@ -186,6 +199,8 @@ def _tags_for(text: str, area: str | None) -> list[str]:
     }
     area_tag = area_tags.get(_core_area(area))
     if area_tag == "AI" and "AI" not in tags and strong_signal_count(text) == 0:
+        area_tag = None
+    if area_tag and not tags and strong_signal_count(text) == 0 and weak_signal_count(text) == 0:
         area_tag = None
     if area_tag and area_tag not in tags:
         tags.insert(0, area_tag)
@@ -272,6 +287,8 @@ def _relevance_quality_score(text: str, tags: list[str], area: str | None) -> fl
 
 def _apply_relevance_cap(score: float, components: dict[str, float], text: str) -> float:
     relevance = components["relevance_quality"]
+    if strong_signal_count(text) == 0 and weak_signal_count(text) == 0:
+        return min(score, 48.0)
     if is_consumer_off_topic(text) and strong_signal_count(text) == 0:
         return min(score, 48.0)
     if relevance < 35:
@@ -308,7 +325,7 @@ def calculate_item_score(
 ) -> ScoringResult:
     config = config or {}
     now = now or datetime.now(timezone.utc)
-    text = _text_for(item)
+    text = _relevance_text_for(item)
     area = _get(item, "area_matcheada") or _get(item, "area")
     source = str(_get(item, "fuente") or _get(item, "source") or "")
     tags = _tags_for(text, area)

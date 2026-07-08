@@ -49,6 +49,11 @@ class TestSchema(unittest.TestCase):
         self.assertIn("selection_reason", columns)
         self.assertIn("discussion_url", columns)
         self.assertIn("resumen_ia_en", columns)
+        self.assertIn("github_total_stars", columns)
+        self.assertIn("github_stars_period", columns)
+        self.assertIn("github_period_label", columns)
+        self.assertIn("github_metrics_updated_at", columns)
+        self.assertIn("github_fresh_date", columns)
 
 
 class TestArticleScoring(unittest.TestCase):
@@ -164,6 +169,69 @@ class TestArticleScoring(unittest.TestCase):
         self.assertGreaterEqual(calculate_item_score(ai_item, now=now).selected_score, 80)
         self.assertGreaterEqual(calculate_item_score(security_item, now=now).selected_score, 70)
 
+    def test_github_trending_metadata_does_not_create_developer_tools_tag(self) -> None:
+        from datetime import datetime, timezone
+
+        from src.scoring import calculate_item_score
+
+        now = datetime(2026, 7, 8, 12, tzinfo=timezone.utc)
+        item = {
+            "titulo": "[GitHub] owner/repo \u2b5010,000 (+1,000 stars today)",
+            "descripcion_original": "",
+            "fuente": "GitHub Trending",
+            "area_matcheada": "general",
+            "fecha_ingesta": now,
+            "ranking": 1,
+        }
+
+        result = calculate_item_score(item, now=now)
+
+        self.assertNotIn("Developer Tools", result.tags)
+        self.assertEqual(result.components["popularity"], 100.0)
+        self.assertLessEqual(result.selected_score, 48)
+
+    def test_popular_github_trending_repo_with_weak_relevance_is_capped(self) -> None:
+        from datetime import datetime, timezone
+
+        from src.scoring import calculate_item_score
+
+        now = datetime(2026, 7, 8, 12, tzinfo=timezone.utc)
+        item = {
+            "titulo": "[GitHub] owner/repo \u2b5010,000 (+1,000 stars today)",
+            "descripcion_original": "A popular collection of notes.",
+            "fuente": "GitHub Trending",
+            "area_matcheada": "developer_tools",
+            "fecha_ingesta": now,
+            "ranking": 1,
+        }
+
+        result = calculate_item_score(item, now=now)
+
+        self.assertNotIn("Developer Tools", result.tags)
+        self.assertEqual(result.components["popularity"], 100.0)
+        self.assertLessEqual(result.selected_score, 48)
+
+    def test_relevant_github_trending_repo_still_scores_highly(self) -> None:
+        from datetime import datetime, timezone
+
+        from src.scoring import calculate_item_score
+
+        now = datetime(2026, 7, 8, 12, tzinfo=timezone.utc)
+        item = {
+            "titulo": "[GitHub] owner/repo \u2b5010,000 (+1,000 stars today)",
+            "descripcion_original": "Open source AI agent SDK for developer workflows and model inference.",
+            "fuente": "GitHub Trending",
+            "area_matcheada": "developer_tools",
+            "fecha_ingesta": now,
+            "ranking": 1,
+        }
+
+        result = calculate_item_score(item, now=now)
+
+        self.assertGreaterEqual(result.selected_score, 80)
+        self.assertIn("AI", result.tags)
+        self.assertEqual(result.components["popularity"], 100.0)
+
     def test_ingestion_keyword_matching_does_not_match_ai_inside_airpods(self) -> None:
         from src.relevance import classify_relevance
 
@@ -188,6 +256,45 @@ class TestArticleScoring(unittest.TestCase):
         )
         self.assertTrue(relevant_ai)
         self.assertEqual(area_ai, "ai_agents")
+
+    def test_book_library_story_is_not_developer_tools_news(self) -> None:
+        from datetime import datetime, timezone
+
+        from src.relevance import classify_relevance
+        from src.scoring import calculate_item_score
+
+        areas = {
+            "developer_tools": ["developer", "software library", "python library", "javascript library", "api"],
+        }
+        title = "Dua Lipa opens library for banned and censored books in Portugal"
+
+        relevant, area = classify_relevance(title, "", areas)
+        base_item = {
+            "titulo": title,
+            "descripcion_original": "",
+            "fuente": "Hacker News",
+            "fecha_ingesta": datetime(2026, 7, 7, 12, tzinfo=timezone.utc),
+            "score": 157,
+            "num_comentarios": 157,
+        }
+        scored = calculate_item_score(
+            {
+                **base_item,
+                "area_matcheada": "general",
+            },
+            now=datetime(2026, 7, 7, 13, tzinfo=timezone.utc),
+        )
+        stored_false_positive = calculate_item_score(
+            {**base_item, "area_matcheada": "developer_tools"},
+            now=datetime(2026, 7, 7, 13, tzinfo=timezone.utc),
+        )
+
+        self.assertFalse(relevant)
+        self.assertEqual(area, "")
+        self.assertNotIn("Developer Tools", scored.tags)
+        self.assertLessEqual(scored.selected_score, 58)
+        self.assertNotIn("Developer Tools", stored_false_positive.tags)
+        self.assertLessEqual(stored_false_positive.selected_score, 48)
 
 
 class TestGlobalNews(unittest.TestCase):
@@ -245,6 +352,52 @@ class TestGlobalNews(unittest.TestCase):
             [item.url for item in dedupe_global_items([trusted, duplicate])],
             ["https://github.blog/ai-and-ml/example"],
         )
+
+    def test_normalize_global_item_accepts_hugging_face_blog_urls(self) -> None:
+        from src.global_news import normalize_global_item
+
+        item = normalize_global_item(
+            title="LeRobot v0.6.0 improves robotics training workflows",
+            source="Hugging Face Blog",
+            url="https://huggingface.co/blog/lerobot-v0-6",
+            excerpt="A release for datasets, models, and training.",
+        )
+        spoofed = normalize_global_item(
+            title="Fake Hugging Face story",
+            source="Hugging Face Blog",
+            url="https://example.com/blog/lerobot-v0-6",
+        )
+
+        self.assertIsNotNone(item)
+        self.assertEqual(item.source, "Hugging Face Blog")
+        self.assertIsNone(spoofed)
+
+    def test_fetch_global_news_reads_hugging_face_blog_cards(self) -> None:
+        import src.global_news as global_news
+
+        class Response:
+            text = """
+            <a href="/blog/lerobot-v0-6">
+                <article>
+                    <h3>LeRobot v0.6.0 improves robotics training workflows</h3>
+                    <p>Datasets, models, and training updates for developers.</p>
+                    <time datetime="2026-07-01T10:00:00Z">Jul 1, 2026</time>
+                </article>
+            </a>
+            """
+
+            def raise_for_status(self):
+                return None
+
+        with patch.object(global_news, "_fetch_reuters_sitemap", return_value=[]), \
+             patch.object(global_news.feedparser, "parse", return_value=type("Parsed", (), {"entries": []})()), \
+             patch.object(global_news.requests, "get", return_value=Response()):
+            items = global_news.fetch_global_news(max_items=5)
+
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0].source, "Hugging Face Blog")
+        self.assertEqual(items[0].url, "https://huggingface.co/blog/lerobot-v0-6")
+        self.assertEqual(items[0].published_at, "2026-07-01T10:00:00+00:00")
 
     def test_looks_like_it_story_does_not_match_ai_inside_words(self) -> None:
         from src.global_news import looks_like_it_story
@@ -304,6 +457,55 @@ class TestHybridPayload(unittest.TestCase):
         self.assertEqual(len(payload["source_records"]), 15)
         self.assertTrue(payload["global_news"][0]["url"].startswith("https://www.reuters.com/"))
         self.assertEqual(payload["developer_signals"][0]["score"], 19)
+
+    def test_web_services_exposes_hugging_face_source_and_counts_it_as_global_news(self) -> None:
+        import src.web_services as web_services
+
+        class CountQuery:
+            def count(self):
+                return 10
+
+            def filter(self, *_args):
+                return self
+
+        class LatestQuery:
+            def order_by(self, *_args):
+                return self
+
+            def limit(self, *_args):
+                return self
+
+            def scalar(self):
+                return real_datetime(2026, 7, 1, 10, 0)
+
+        class SourceQuery:
+            def all(self):
+                return [
+                    ("Reuters",),
+                    ("GitHub Blog",),
+                    ("OpenAI Blog",),
+                    ("Hugging Face Blog",),
+                    ("Hugging Face Blog",),
+                    ("Hacker News",),
+                ]
+
+        class Session:
+            def query(self, column):
+                if column is web_services.Noticia.fuente:
+                    return SourceQuery()
+                if column is web_services.Noticia.fecha_ingesta:
+                    return LatestQuery()
+                return CountQuery()
+
+        @contextmanager
+        def fake_session():
+            yield Session()
+
+        with patch.object(web_services, "get_session", side_effect=fake_session):
+            stats = web_services.get_stats()
+
+        self.assertIn("Hugging Face Blog", web_services.SOURCES)
+        self.assertEqual(stats["global_news_count"], 5)
 
     def test_gemini_failure_does_not_use_low_volume_fallback_when_articles_exist(self) -> None:
         import src.processor as processor
@@ -692,6 +894,40 @@ class TestGlobalNewsIngestion(unittest.TestCase):
 
         self.assertEqual(scheduled_windows, [1])
 
+    def test_github_worker_uses_stable_repo_id(self) -> None:
+        import src.ingestor as ingestor
+
+        class Response:
+            text = """
+            <article class="Box-row">
+                <h2><a href="/owner/repo">owner / repo</a></h2>
+                <p>Developer SDK for AI agents.</p>
+                <a href="/owner/repo/stargazers">8,000</a>
+                <span class="d-inline-block float-sm-right">1,000 stars today</span>
+                <span itemprop="programmingLanguage">Python</span>
+            </article>
+            """
+
+            def raise_for_status(self):
+                return None
+
+        with patch.object(ingestor.requests, "get", return_value=Response()):
+            noticias, _metrics = ingestor._worker_github(
+                {"nombre": "GitHub Trending"},
+                {"timeout_request": 15},
+                {"developer_tools": ["developer", "sdk", "ai agents"]},
+                dias_ventana=1,
+            )
+
+        self.assertEqual(len(noticias), 1)
+        self.assertEqual(noticias[0].id, ingestor._calcular_hash("owner/repo", "https://github.com/owner/repo"))
+        self.assertEqual(noticias[0].github_total_stars, 8000)
+        self.assertEqual(noticias[0].github_stars_period, 1000)
+        self.assertEqual(noticias[0].github_period_label, "today")
+        self.assertEqual(noticias[0].score, 1000)
+        self.assertIsNotNone(noticias[0].github_metrics_updated_at)
+        self.assertIsNotNone(noticias[0].github_fresh_date)
+
     def test_hacker_news_algolia_failure_reports_specific_worker_name(self) -> None:
         import src.ingestor as ingestor
 
@@ -736,11 +972,19 @@ class TestGlobalNewsIngestion(unittest.TestCase):
                 category="AI",
                 score=8,
             ),
+            normalize_global_item(
+                title="LeRobot v0.6.0 improves robotics training workflows",
+                source="Hugging Face Blog",
+                url="https://huggingface.co/blog/lerobot-v0-6",
+                excerpt="Datasets, models, and training updates for developers.",
+                category="AI",
+                score=7,
+            ),
         ]
 
         noticias = _noticias_desde_global_items([item for item in items if item is not None])
 
-        self.assertEqual([n.fuente for n in noticias], ["Reuters", "GitHub Blog", "OpenAI Blog"])
+        self.assertEqual([n.fuente for n in noticias], ["Reuters", "GitHub Blog", "OpenAI Blog", "Hugging Face Blog"])
         self.assertEqual(noticias[0].area_matcheada, "cybersecurity")
         self.assertEqual(noticias[0].fecha_publicacion, real_datetime(2026, 6, 19, 12, 34, 56))
         self.assertIsNone(noticias[1].fecha_publicacion)
@@ -853,6 +1097,206 @@ class TestGlobalNewsIngestion(unittest.TestCase):
         self.assertEqual(existing.ranking, 1)
         self.assertEqual(existing.fecha_ingesta, real_datetime(2026, 6, 24, 18, 40))
         self.assertIsNone(existing.selected_score)
+        self.assertEqual(existing.github_fresh_date, date(2026, 6, 24))
+
+    def test_github_trending_duplicate_url_reuses_existing_row(self) -> None:
+        import src.ingestor as ingestor
+        from src.database import Noticia
+
+        existing = Noticia(
+            id="old-daily-id",
+            titulo="[GitHub] calesthio/OpenMontage (+100 stars this week)",
+            url="https://github.com/calesthio/OpenMontage",
+            fuente="GitHub Trending",
+            descripcion_original="Old description",
+            fecha_ingesta=real_datetime(2026, 6, 23, 12, 0),
+            ranking=18,
+            selected_score=91,
+        )
+        incoming = Noticia(
+            id="new-stable-id",
+            titulo="[GitHub] calesthio/OpenMontage (+3,703 stars today)",
+            url="https://github.com/calesthio/OpenMontage",
+            fuente="GitHub Trending",
+            descripcion_original="Current description",
+            area_matcheada="inteligencia_artificial",
+            fecha_ingesta=real_datetime(2026, 6, 24, 18, 40),
+            ranking=1,
+        )
+        added = []
+
+        @contextmanager
+        def fake_session():
+            class Query:
+                def filter(self, *_args):
+                    return self
+
+                def first(self):
+                    return existing
+
+            class Session:
+                def get(self, *_args):
+                    return None
+
+                def query(self, *_args):
+                    return Query()
+
+                def add(self, noticia):
+                    added.append(noticia)
+
+                def commit(self):
+                    return None
+
+            yield Session()
+
+        metrics = {
+            "total_procesadas": 1,
+            "fuentes_fallidas": 0,
+            "nombres_fallidas": [],
+            "no_relevantes": 0,
+        }
+        config = {
+            "app": {"github_trending_dias_hoy": 1},
+            "areas_interes": {},
+            "fuentes": [{"nombre": "GitHub Trending", "tipo": "github_api"}],
+        }
+
+        with patch.object(ingestor, "cargar_config", return_value=config), \
+             patch.object(ingestor, "_worker_github", return_value=([incoming], metrics)), \
+             patch.object(ingestor, "get_session", side_effect=fake_session):
+            result = ingestor.ejecutar_ingesta()
+
+        self.assertEqual(added, [])
+        self.assertEqual(result["nuevas_persistidas"], 0)
+        self.assertEqual(result["duplicadas_omitidas"], 1)
+        self.assertEqual(existing.titulo, incoming.titulo)
+        self.assertEqual(existing.ranking, 1)
+        self.assertIsNone(existing.selected_score)
+
+    def test_same_day_github_refresh_updates_metrics_without_bumping_freshness(self) -> None:
+        import src.ingestor as ingestor
+        from src.database import Noticia
+
+        original_fresh_time = real_datetime(2026, 6, 24, 12, 0)
+        existing = Noticia(
+            id="github-trending",
+            titulo="[GitHub] calesthio/OpenMontage (+100 stars today)",
+            url="https://github.com/calesthio/openmontage",
+            fuente="GitHub Trending",
+            descripcion_original="Old description",
+            fecha_ingesta=original_fresh_time,
+            github_fresh_date=date(2026, 6, 24),
+            github_total_stars=4000,
+            github_stars_period=100,
+            github_period_label="today",
+            github_metrics_updated_at=real_datetime(2026, 6, 24, 12, 0),
+            ranking=18,
+            selected_score=91,
+        )
+        incoming = Noticia(
+            id="github-trending",
+            titulo="[GitHub] calesthio/OpenMontage (+200 stars today)",
+            url="https://github.com/calesthio/OpenMontage",
+            fuente="GitHub Trending",
+            descripcion_original="Current description",
+            area_matcheada="inteligencia_artificial",
+            fecha_ingesta=real_datetime(2026, 6, 24, 18, 40),
+            github_fresh_date=date(2026, 6, 24),
+            github_total_stars=4500,
+            github_stars_period=200,
+            github_period_label="today",
+            github_metrics_updated_at=real_datetime(2026, 6, 24, 18, 40),
+            ranking=1,
+        )
+
+        @contextmanager
+        def fake_session():
+            class Session:
+                def get(self, *_args):
+                    return existing
+
+                def commit(self):
+                    return None
+
+            yield Session()
+
+        metrics = {
+            "total_procesadas": 1,
+            "fuentes_fallidas": 0,
+            "nombres_fallidas": [],
+            "no_relevantes": 0,
+        }
+        config = {
+            "app": {"github_trending_dias_hoy": 1},
+            "areas_interes": {},
+            "fuentes": [{"nombre": "GitHub Trending", "tipo": "github_api"}],
+        }
+
+        with patch.object(ingestor, "cargar_config", return_value=config), \
+             patch.object(ingestor, "_worker_github", return_value=([incoming], metrics)), \
+             patch.object(ingestor, "get_session", side_effect=fake_session):
+            ingestor.ejecutar_ingesta()
+
+        self.assertEqual(existing.fecha_ingesta, original_fresh_time)
+        self.assertEqual(existing.github_total_stars, 4500)
+        self.assertEqual(existing.github_stars_period, 200)
+        self.assertEqual(existing.ranking, 1)
+        self.assertIsNone(existing.selected_score)
+
+    def test_duplicate_github_cleanup_preserves_favorite_and_latest_metrics(self) -> None:
+        import src.ingestor as ingestor
+        from src.database import Noticia
+
+        kept = Noticia(
+            id="favorite-old",
+            titulo="[GitHub] owner/repo (+10 stars today)",
+            url="https://github.com/owner/repo",
+            fuente="GitHub Trending",
+            fecha_ingesta=real_datetime(2026, 6, 24, 9, 0),
+            github_fresh_date=date(2026, 6, 24),
+            github_total_stars=100,
+            github_stars_period=10,
+            github_metrics_updated_at=real_datetime(2026, 6, 24, 9, 0),
+            is_favorite=1,
+            resumen_ia="Saved summary",
+        )
+        duplicate = Noticia(
+            id="latest-duplicate",
+            titulo="[GitHub] Owner/Repo (+80 stars today)",
+            url="https://github.com/Owner/Repo/",
+            fuente="GitHub Trending",
+            fecha_ingesta=real_datetime(2026, 6, 24, 11, 0),
+            github_fresh_date=date(2026, 6, 24),
+            github_total_stars=180,
+            github_stars_period=80,
+            github_metrics_updated_at=real_datetime(2026, 6, 24, 11, 0),
+            ranking=2,
+        )
+        deleted = []
+
+        class Query:
+            def filter(self, *_args):
+                return self
+
+            def all(self):
+                return [kept, duplicate]
+
+        class Session:
+            def query(self, *_args):
+                return Query()
+
+            def delete(self, noticia):
+                deleted.append(noticia)
+
+        removed = ingestor._merge_duplicate_github_repos(Session())
+
+        self.assertEqual(removed, 1)
+        self.assertEqual(deleted, [duplicate])
+        self.assertEqual(kept.is_favorite, 1)
+        self.assertEqual(kept.resumen_ia, "Saved summary")
+        self.assertEqual(kept.github_total_stars, 180)
+        self.assertEqual(kept.github_stars_period, 80)
+        self.assertEqual(kept.ranking, 2)
 
 if __name__ == "__main__":
     unittest.main()

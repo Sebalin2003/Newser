@@ -11,6 +11,7 @@ from urllib.parse import urlparse
 
 import feedparser
 import requests
+from bs4 import BeautifulSoup
 
 from src.media import MediaPreview, extract_media_from_feed_entry
 
@@ -20,6 +21,7 @@ TRUSTED_SOURCES = {
     "Reuters": ("reuters.com", "www.reuters.com"),
     "GitHub Blog": ("github.blog",),
     "OpenAI Blog": ("openai.com",),
+    "Hugging Face Blog": ("huggingface.co",),
 }
 
 FEEDS = [
@@ -28,6 +30,7 @@ FEEDS = [
 ]
 
 REUTERS_NEWS_SITEMAP = "https://www.reuters.com/arc/outboundfeeds/news-sitemap/?outputType=xml"
+HUGGING_FACE_BLOG_URL = "https://huggingface.co/blog"
 
 IT_KEYWORDS = (
     "artificial intelligence", "cyber", "security", "hack", "vulnerability",
@@ -202,8 +205,54 @@ def _fetch_reuters_sitemap(max_items: int, timeout: int) -> list[GlobalNewsItem]
     return items
 
 
+def _fetch_hugging_face_blog(max_items: int, timeout: int) -> list[GlobalNewsItem]:
+    try:
+        response = requests.get(
+            HUGGING_FACE_BLOG_URL,
+            timeout=timeout,
+            headers={"User-Agent": "Mozilla/5.0 DeveloperPulse/2.0"},
+        )
+        response.raise_for_status()
+    except Exception as exc:
+        logger.warning("No se pudo leer Hugging Face Blog: %s", exc)
+        return []
+
+    soup = BeautifulSoup(response.text, "html.parser")
+    items: list[GlobalNewsItem] = []
+    for index, link in enumerate(soup.select('a[href^="/blog/"], a[href^="https://huggingface.co/blog/"]')):
+        href = str(link.get("href") or "").strip()
+        if href.startswith("/"):
+            href = f"https://huggingface.co{href}"
+        parsed = urlparse(href)
+        if parsed.path.rstrip("/") == "/blog":
+            continue
+
+        title_node = link.find(["h1", "h2", "h3", "h4"])
+        if title_node is None:
+            continue
+        excerpt_node = link.find("p")
+        date_node = link.find("time")
+        title = title_node.get_text(" ", strip=True)
+        excerpt = excerpt_node.get_text(" ", strip=True) if excerpt_node else ""
+        published = date_node.get("datetime") or date_node.get_text(" ", strip=True) if date_node else ""
+        item = normalize_global_item(
+            title=title,
+            source="Hugging Face Blog",
+            url=href,
+            published_at=published,
+            excerpt=excerpt,
+            score=max(1, max_items * 2 - index),
+        )
+        if item:
+            items.append(item)
+        if len(items) >= max_items:
+            break
+    return items
+
+
 def fetch_global_news(max_items: int = 10, timeout: int = 12) -> list[GlobalNewsItem]:
     items: list[GlobalNewsItem | None] = _fetch_reuters_sitemap(max_items=max_items, timeout=timeout)
+    items.extend(_fetch_hugging_face_blog(max_items=max_items, timeout=timeout))
     for source, feed_url in FEEDS:
         try:
             parsed = feedparser.parse(feed_url, request_headers={"User-Agent": "DeveloperPulse/2.0"}, agent="DeveloperPulse/2.0")

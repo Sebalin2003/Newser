@@ -20,6 +20,14 @@ from src import web_services
 BASE_DIR = Path(__file__).resolve().parent
 REFRESH_JOB_ID = "feed_refresh"
 DAILY_BRIEF_JOB_ID = "daily_brief"
+SOURCE_LINKS = {
+    "GitHub Trending": "https://github.com/trending",
+    "Hacker News": "https://news.ycombinator.com/",
+    "Reuters": "https://www.reuters.com/technology/",
+    "GitHub Blog": "https://github.blog/",
+    "OpenAI Blog": "https://openai.com/news/",
+    "Hugging Face Blog": "https://huggingface.co/blog",
+}
 
 
 @asynccontextmanager
@@ -40,7 +48,7 @@ def create_scheduler() -> BackgroundScheduler:
     scheduler = BackgroundScheduler(timezone=web_services.BRIEF_TIMEZONE)
     scheduler.add_job(
         web_services.ensure_feed_refresh,
-        trigger=IntervalTrigger(minutes=30, timezone=web_services.BRIEF_TIMEZONE),
+        trigger=IntervalTrigger(hours=1, timezone=web_services.BRIEF_TIMEZONE),
         id=REFRESH_JOB_ID,
         kwargs={"background": True},
         max_instances=1,
@@ -71,6 +79,7 @@ def index(request: Request):
         "index.html",
         {
             "sources": web_services.SOURCES,
+            "source_links": SOURCE_LINKS,
             "areas": web_services.area_options("es"),
             "min_date": minimum.isoformat(),
             "max_date": maximum.isoformat(),

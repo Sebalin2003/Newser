@@ -15,7 +15,8 @@ from zoneinfo import ZoneInfo
 
 import yaml
 from dotenv import load_dotenv
-from sqlalchemy import or_
+from sqlalchemy import and_, func, or_
+from sqlalchemy.orm import load_only
 
 from src.database import MacroResumen, Noticia, get_session, init_db, limpiar_datos_antiguos
 from src.media import fetch_media_preview
@@ -32,13 +33,17 @@ load_dotenv()
 CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.yaml"
 BRIEF_TIMEZONE = ZoneInfo("America/Argentina/Buenos_Aires")
 FILTER_WINDOW_DAYS = 30
-FEED_REFRESH_INTERVAL = timedelta(minutes=30)
+FEED_REFRESH_INTERVAL = timedelta(hours=1)
 DAILY_BRIEF_HOUR = 8
+ENGLISH_ARCHIVE_BACKFILL_LIMIT = 3
 HOT_TOPIC_MIN_SOURCES = 3
 HOT_TOPIC_SUPPORT_LIMIT = 5
 HOT_TOPIC_SIMILARITY_THRESHOLD = 0.42
 HOT_TOPIC_MODEL_ANCHORED_SIMILARITY_THRESHOLD = 0.62
 SOURCE_PRIORITY_SORT_BOOST = 4.0
+FEED_QUERY_LIMIT = 220
+HOT_TOPIC_QUERY_LIMIT = 250
+MIN_FEED_SCORE = 50.0
 HOT_TOPIC_MODEL_PATTERN = re.compile(
     r"\b(?:gpt|claude|gemini|llama|mistral|qwen|deepseek|grok|o)\s*[-\u2010-\u2015\u2212]?\s*\d+(?:\.\d+)*\b",
     re.IGNORECASE,
@@ -55,6 +60,8 @@ _daily_brief_state: dict[str, Any] = {
     "last_finished_at": None,
     "last_error": None,
 }
+_summary_locks_guard = threading.Lock()
+_summary_locks: dict[tuple[str, str], threading.Lock] = {}
 
 SOURCES = [
     "GitHub Trending",
@@ -62,6 +69,7 @@ SOURCES = [
     "Reuters",
     "GitHub Blog",
     "OpenAI Blog",
+    "Hugging Face Blog",
 ]
 
 AREAS = {
@@ -384,6 +392,50 @@ def _dedupe_feed_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return deduped
 
 
+def _search_condition(session: Any, query_text: str) -> Any:
+    if session.bind and session.bind.dialect.name == "postgresql":
+        terms = re.findall(r"[A-Za-z0-9]+", query_text.lower())
+        if not terms:
+            pattern = f"%{query_text}%"
+            return or_(Noticia.titulo.ilike(pattern), Noticia.descripcion_original.ilike(pattern))
+        document = (
+            func.coalesce(Noticia.titulo, "")
+            + " "
+            + func.coalesce(Noticia.descripcion_original, "")
+        )
+        vector = func.to_tsvector(
+            "simple",
+            document,
+        )
+        return vector.op("@@")(
+            func.to_tsquery("simple", " & ".join(f"{term}:*" for term in terms))
+        )
+    pattern = f"%{query_text}%"
+    return or_(
+        Noticia.titulo.ilike(pattern),
+        Noticia.descripcion_original.ilike(pattern),
+    )
+
+
+def _date_condition(selected_date: date) -> Any:
+    start = datetime(
+        selected_date.year,
+        selected_date.month,
+        selected_date.day,
+        tzinfo=BRIEF_TIMEZONE,
+    ).astimezone(timezone.utc)
+    end = start + timedelta(days=1)
+    ingested_on_date = and_(Noticia.fecha_ingesta >= start, Noticia.fecha_ingesta < end)
+    published_on_date = and_(Noticia.fecha_publicacion >= start, Noticia.fecha_publicacion < end)
+    return or_(
+        and_(Noticia.fuente == "GitHub Trending", ingested_on_date),
+        and_(
+            Noticia.fuente != "GitHub Trending",
+            or_(published_on_date, and_(Noticia.fecha_publicacion.is_(None), ingested_on_date)),
+        ),
+    )
+
+
 def get_feed(
     fecha: str | None = None,
     fuentes: list[str] | None = None,
@@ -403,25 +455,53 @@ def get_feed(
     area_filter = [area for area in (areas or []) if area]
     query_text = (q or "").strip()
     cutoff = datetime.now(timezone.utc) - timedelta(days=FILTER_WINDOW_DAYS)
+    article_columns = (
+        Noticia.id, Noticia.titulo, Noticia.url, Noticia.discussion_url, Noticia.fuente,
+        Noticia.fecha_publicacion, Noticia.fecha_ingesta, Noticia.descripcion_original,
+        Noticia.resumen_ia, Noticia.resumen_ia_en, Noticia.area_matcheada,
+        Noticia.ranking, Noticia.num_comentarios, Noticia.score, Noticia.selected_score,
+        Noticia.tags_json, Noticia.selection_reason, Noticia.score_version,
+        Noticia.is_favorite, Noticia.favorited_at, Noticia.media_url, Noticia.media_type,
+        Noticia.media_source_url,
+    )
 
     with get_session() as session:
         query = session.query(Noticia).filter(Noticia.fecha_ingesta >= cutoff)
+        query = query.filter(or_(Noticia.selected_score >= MIN_FEED_SCORE, Noticia.selected_score.is_(None)))
+        if selected_date is not None:
+            query = query.filter(_date_condition(selected_date))
         if query_text:
-            pattern = f"%{query_text}%"
-            query = query.filter(
-                or_(
-                    Noticia.titulo.ilike(pattern),
-                    Noticia.descripcion_original.ilike(pattern),
-                    Noticia.resumen_ia.ilike(pattern),
-                    Noticia.resumen_ia_en.ilike(pattern),
-                )
-            )
+            query = query.filter(_search_condition(session, query_text))
         if source_filter:
             query = query.filter(Noticia.fuente.in_(source_filter))
         if area_filter:
             query = query.filter(Noticia.area_matcheada.in_(area_filter_keys(area_filter)))
-        rows = query.order_by(Noticia.fecha_ingesta.desc()).limit(300).all()
+        if orden == "Mas reciente" or selected_date is not None:
+            query = query.order_by(Noticia.fecha_ingesta.desc())
+        else:
+            query = query.order_by(Noticia.selected_score.desc().nullslast(), Noticia.fecha_ingesta.desc())
+        if query_text:
+            row_limit = min(300, max(limit * 2, 80))
+            ids = [row_id for (row_id,) in query.with_entities(Noticia.id).limit(row_limit).all()]
+            if ids:
+                row_order = {row_id: index for index, row_id in enumerate(ids)}
+                rows = (
+                    session.query(Noticia)
+                    .options(load_only(*article_columns))
+                    .filter(Noticia.id.in_(ids))
+                    .all()
+                )
+                rows.sort(key=lambda row: row_order.get(row.id, len(row_order)))
+            else:
+                rows = []
+        elif selected_date is not None:
+            row_limit = 300
+            rows = query.options(load_only(*article_columns)).limit(row_limit).all()
+        else:
+            row_limit = max(FEED_QUERY_LIMIT, limit)
+            rows = query.options(load_only(*article_columns)).limit(row_limit).all()
         items = [_serialize_article(row, config, selected_lang) for row in rows]
+    items = [item for item in items if float(item.get("selected_score") or 0) >= MIN_FEED_SCORE]
     for item in items:
         item["source_preference"] = "prioritized" if item.get("fuente") in prioritized_sources else "normal"
     if selected_date is not None:
@@ -432,7 +512,7 @@ def get_feed(
         "count": len(items),
         "fecha": "all" if all_dates else selected_date.isoformat(),
         "orden": orden,
-        "hot_topics": [] if all_dates else get_hot_topics(selected_date, lang=selected_lang),
+        "hot_topics": [] if (all_dates or query_text) else get_hot_topics(selected_date, lang=selected_lang),
     }
 
 
@@ -456,12 +536,14 @@ def get_brief(fecha: str | None = None, lang: str | None = None) -> dict[str, An
         if selected_lang == "en" and not (brief.texto_en or brief.brief_json_en):
             current_date = datetime.now(BRIEF_TIMEZONE).date()
             if selected_date == current_date:
-                from src.processor import generar_macro_resumen_dia
-
-                result = generar_macro_resumen_dia(load_config(), language="en")
-                if result.get("macro_resumen_generado") is not False:
-                    session.expire_all()
-                    brief = session.query(MacroResumen).filter(MacroResumen.fecha == selected_date).first()
+                catchup_started = ensure_english_daily_brief(background=True)
+                return {
+                    "available": False,
+                    "fecha": selected_date.isoformat(),
+                    "catchup_started": catchup_started,
+                    "catchup_running": _daily_brief_lock.locked(),
+                    "catchup_error": _daily_brief_state.get("last_error"),
+                }
             if not (brief and (brief.texto_en or brief.brief_json_en)):
                 return {
                     "available": False,
@@ -502,6 +584,18 @@ def _run_daily_brief_catchup() -> None:
         _daily_brief_lock.release()
 
 
+def _run_english_daily_brief(brief_date: date | None = None) -> None:
+    _daily_brief_state["last_started_at"] = datetime.now(timezone.utc)
+    _daily_brief_state["last_error"] = None
+    try:
+        generate_english_daily_brief_job(brief_date)
+    except Exception as exc:
+        _daily_brief_state["last_error"] = str(exc)
+    finally:
+        _daily_brief_state["last_finished_at"] = datetime.now(timezone.utc)
+        _daily_brief_lock.release()
+
+
 def ensure_daily_brief_catchup(background: bool = True) -> bool:
     if not should_catch_up_daily_brief():
         return False
@@ -511,6 +605,16 @@ def ensure_daily_brief_catchup(background: bool = True) -> bool:
         threading.Thread(target=_run_daily_brief_catchup, daemon=True).start()
     else:
         _run_daily_brief_catchup()
+    return True
+
+
+def ensure_english_daily_brief(background: bool = True, brief_date: date | None = None) -> bool:
+    if not _daily_brief_lock.acquire(blocking=False):
+        return False
+    if background:
+        threading.Thread(target=_run_english_daily_brief, args=(brief_date,), daemon=True).start()
+    else:
+        _run_english_daily_brief(brief_date)
     return True
 
 
@@ -546,6 +650,11 @@ def get_past_daily_briefs(today: date | None = None, lang: str | None = None) ->
             .order_by(MacroResumen.fecha.desc())
             .all()
         )
+        if selected_lang == "en":
+            for row in rows[:ENGLISH_ARCHIVE_BACKFILL_LIMIT]:
+                if not (row.texto_en or row.brief_json_en):
+                    ensure_english_daily_brief(background=True, brief_date=row.fecha)
+                    break
         items = [_serialize_brief(row, selected_lang) for row in rows]
     if selected_lang == "en":
         items = [item for item in items if item.get("texto") or item.get("brief_json")]
@@ -627,7 +736,7 @@ def get_stats(lang: str | None = None) -> dict[str, Any]:
         "ai_coverage_pct": round((summarized / total * 100), 1) if total else 0,
         "latest_analysis": _iso(latest),
         "source_counts": source_counts,
-        "global_news_count": sum(source_counts.get(source, 0) for source in ["Reuters", "GitHub Blog", "OpenAI Blog"]),
+        "global_news_count": sum(source_counts.get(source, 0) for source in ["Reuters", "GitHub Blog", "OpenAI Blog", "Hugging Face Blog"]),
     }
 
 
@@ -641,23 +750,77 @@ def get_suggestions(
     query_text = q.strip()
     if len(query_text) < 2:
         return []
-    feed = get_feed(
-        fecha=fecha,
-        fuentes=fuentes,
-        areas=areas,
-        q=query_text,
-        limit=5,
-        lang=lang,
-    )
+    all_dates = is_all_dates_filter(fecha)
+    selected_date = None if all_dates else parse_filter_date(fecha)
+    source_filter = [source for source in (fuentes or []) if source]
+    area_filter = [area for area in (areas or []) if area]
+    cutoff = datetime.now(timezone.utc) - timedelta(days=FILTER_WINDOW_DAYS)
+    with get_session() as session:
+        query = session.query(Noticia).filter(
+            Noticia.fecha_ingesta >= cutoff,
+            or_(Noticia.selected_score >= MIN_FEED_SCORE, Noticia.selected_score.is_(None)),
+            _search_condition(session, query_text),
+        )
+        if selected_date is not None:
+            query = query.filter(_date_condition(selected_date))
+        if source_filter:
+            query = query.filter(Noticia.fuente.in_(source_filter))
+        if area_filter:
+            query = query.filter(Noticia.area_matcheada.in_(area_filter_keys(area_filter)))
+        rows = [
+            {
+                "id": str(row.id or ""),
+                "title": str(row.titulo or ""),
+                "source": str(row.fuente or ""),
+                "score": float(row.selected_score or 0),
+                "fecha_publicacion": _iso(row.fecha_publicacion),
+                "fecha_ingesta": _iso(row.fecha_ingesta),
+            }
+            for row in (
+                query.options(load_only(
+                    Noticia.id, Noticia.titulo, Noticia.fuente, Noticia.fecha_publicacion,
+                    Noticia.fecha_ingesta, Noticia.selected_score,
+                ))
+                .order_by(Noticia.selected_score.desc().nullslast(), Noticia.fecha_ingesta.desc())
+                .limit(20)
+                .all()
+            )
+        ]
+
+    feed = [
+        row for row in rows
+        if row["score"] >= MIN_FEED_SCORE
+        and (selected_date is None or _matches_date({
+            "fuente": row["source"],
+            "fecha_publicacion": row["fecha_publicacion"],
+            "fecha_ingesta": row["fecha_ingesta"],
+        }, selected_date))
+    ][:5]
     return [
         {
             "id": item["id"],
-            "title": item["titulo"],
-            "source": item["fuente"],
-            "score": item["selected_score"],
+            "title": item["title"],
+            "source": item["source"],
+            "score": item["score"],
         }
-        for item in feed["items"][:5]
+        for item in feed
     ]
+
+
+def _cached_article_summary(article: Noticia, lang: str) -> str:
+    existing = article.resumen_ia_en if lang == "en" else article.resumen_ia
+    existing = str(existing or "").strip()
+    return existing if existing and existing != "Resumen no disponible" else ""
+
+
+def _get_summary_lock(article_id: str, lang: str) -> threading.Lock:
+    key = (article_id, lang)
+    with _summary_locks_guard:
+        lock = _summary_locks.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _summary_locks[key] = lock
+        return lock
 
 
 def generate_summary(article_id: str, lang: str | None = None) -> dict[str, Any]:
@@ -666,16 +829,24 @@ def generate_summary(article_id: str, lang: str | None = None) -> dict[str, Any]
         article = session.query(Noticia).filter(Noticia.id == article_id).first()
         if not article:
             return {"ok": False, "reason": t("article_not_found", selected_lang)}
-        existing = str((article.resumen_ia_en if selected_lang == "en" else article.resumen_ia) or "").strip()
-        if existing and existing != "Resumen no disponible":
+        existing = _cached_article_summary(article, selected_lang)
+        if existing:
             return {"ok": True, "summary": existing, "cached": True}
-        title = str(article.titulo or "")
 
     if not os.getenv("GEMINI_API_KEY", "").strip():
         return {"ok": False, "reason": t("missing_key", selected_lang)}
     from src.processor import generar_resumen_individual
 
-    return generar_resumen_individual(article_id, title, language=selected_lang)
+    with _get_summary_lock(article_id, selected_lang):
+        with get_session() as session:
+            article = session.query(Noticia).filter(Noticia.id == article_id).first()
+            if not article:
+                return {"ok": False, "reason": t("article_not_found", selected_lang)}
+            existing = _cached_article_summary(article, selected_lang)
+            if existing:
+                return {"ok": True, "summary": existing, "cached": True}
+            title = str(article.titulo or "")
+        return generar_resumen_individual(article_id, title, language=selected_lang)
 
 
 def refresh_feed() -> dict[str, Any]:
@@ -701,14 +872,25 @@ def generate_daily_brief_job() -> dict[str, Any]:
     refresh_feed()
     from src.processor import ejecutar_procesamiento
 
-    return ejecutar_procesamiento()
+    spanish = ejecutar_procesamiento()
+    english = generate_english_daily_brief_job()
+    return {"spanish": spanish, "english": english}
 
 
 def generate_daily_brief_catchup_job() -> dict[str, Any]:
     """Generate a missing brief from already-ingested items for user-facing catch-up."""
     from src.processor import generar_macro_resumen_dia
 
-    return generar_macro_resumen_dia(load_config())
+    spanish = generar_macro_resumen_dia(load_config())
+    english = generate_english_daily_brief_job()
+    return {"spanish": spanish, "english": english}
+
+
+def generate_english_daily_brief_job(brief_date: date | None = None) -> dict[str, Any]:
+    """Generate the English version of a daily brief without blocking a request."""
+    from src.processor import generar_macro_resumen_dia
+
+    return generar_macro_resumen_dia(load_config(), language="en", target_date=brief_date)
 
 
 def enrich_missing_media(limit: int = 20, timeout: int = 4) -> int:
@@ -966,11 +1148,22 @@ def get_hot_topics(selected_date: date, lang: str | None = None) -> list[dict[st
     config = load_config()
     cutoff = datetime.now(timezone.utc) - timedelta(days=FILTER_WINDOW_DAYS)
     with get_session() as session:
+        query = session.query(Noticia).filter(
+            Noticia.fecha_ingesta >= cutoff,
+            _date_condition(selected_date),
+        )
         rows = (
-            session.query(Noticia)
-            .filter(Noticia.fecha_ingesta >= cutoff)
-            .order_by(Noticia.fecha_ingesta.desc())
-            .limit(500)
+            query.options(load_only(
+                Noticia.id, Noticia.titulo, Noticia.url, Noticia.discussion_url, Noticia.fuente,
+                Noticia.fecha_publicacion, Noticia.fecha_ingesta, Noticia.descripcion_original,
+                Noticia.resumen_ia, Noticia.resumen_ia_en, Noticia.area_matcheada,
+                Noticia.cluster_id, Noticia.ranking, Noticia.num_comentarios, Noticia.score,
+                Noticia.selected_score, Noticia.tags_json, Noticia.selection_reason,
+                Noticia.score_version, Noticia.is_favorite, Noticia.favorited_at,
+                Noticia.media_url, Noticia.media_type, Noticia.media_source_url,
+            ))
+            .order_by(Noticia.selected_score.desc().nullslast(), Noticia.fecha_ingesta.desc())
+            .limit(HOT_TOPIC_QUERY_LIMIT)
             .all()
         )
         items = [_serialize_article(row, config, selected_lang) | {"cluster_id": row.cluster_id} for row in rows]

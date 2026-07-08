@@ -133,6 +133,11 @@ class Noticia(Base):
     media_url: str = Column(Text, nullable=True)
     media_type: str = Column(String(16), nullable=True)
     media_source_url: str = Column(Text, nullable=True)
+    github_total_stars: int = Column(Integer, nullable=True)
+    github_stars_period: int = Column(Integer, nullable=True)
+    github_period_label: str = Column(String(32), nullable=True)
+    github_metrics_updated_at: datetime = Column(DateTime, nullable=True)
+    github_fresh_date: date = Column(Date, nullable=True)
 
     def __repr__(self) -> str:
         return f"<Noticia id={self.id[:8]}... titulo='{self.titulo[:40]}'>"
@@ -308,6 +313,12 @@ def migrar_schema() -> None:
     """
     if not is_sqlite_url():
         Base.metadata.create_all(bind=engine)
+        with engine.begin() as conn:
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_noticias_search_fts "
+                "ON noticias USING GIN (to_tsvector('simple', "
+                "coalesce(titulo, '') || ' ' || coalesce(descripcion_original, '')))"
+            ))
         logger.info("Schema migrado correctamente.")
         return
 
@@ -338,6 +349,11 @@ def migrar_schema() -> None:
             "media_type": "ALTER TABLE noticias ADD COLUMN media_type VARCHAR(16)",
             "media_source_url": "ALTER TABLE noticias ADD COLUMN media_source_url TEXT",
             "resumen_ia_en": "ALTER TABLE noticias ADD COLUMN resumen_ia_en TEXT",
+            "github_total_stars": "ALTER TABLE noticias ADD COLUMN github_total_stars INTEGER",
+            "github_stars_period": "ALTER TABLE noticias ADD COLUMN github_stars_period INTEGER",
+            "github_period_label": "ALTER TABLE noticias ADD COLUMN github_period_label VARCHAR(32)",
+            "github_metrics_updated_at": "ALTER TABLE noticias ADD COLUMN github_metrics_updated_at DATETIME",
+            "github_fresh_date": "ALTER TABLE noticias ADD COLUMN github_fresh_date DATE",
         }
 
         with engine.begin() as conn:

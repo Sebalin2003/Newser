@@ -10,7 +10,7 @@
     document.documentElement.dataset.theme = localStorage.getItem("newser.theme") || "dark";
     document.documentElement.lang = localStorage.getItem("newser.language") || "es";
   </script>
-  <link rel="stylesheet" href="/static/app.css?v=final-polish-v1">
+  <link rel="stylesheet" href="/static/app.css?v=brief-meta-v1">
 </head>
 <body>
   <aside class="sidebar">
@@ -27,9 +27,6 @@
     </div>
 
     <nav class="sidebar-section mode-nav" aria-label="Navegación principal" data-i18n-aria-label="nav.main">
-      <div class="sidebar-section-head">
-        <p class="eyebrow" data-i18n="nav.workspace">Espacio de trabajo</p>
-      </div>
       <button type="button" class="nav-button active" data-view-target="today" aria-label="Actualizaciones de hoy" data-i18n-aria-label="nav.today">
         <span class="nav-icon" aria-hidden="true">
           <svg viewBox="0 0 24 24" focusable="false">
@@ -72,14 +69,8 @@
 
     <form id="filters" class="filters">
       <div class="sidebar-section feed-controls">
-        <div class="sidebar-section-head">
-          <p class="eyebrow" data-i18n="filters.title">Controles del feed</p>
-          <span data-date-mode-label>Hoy</span>
-        </div>
-
         <label class="field">
-          <span data-i18n="filters.date">Fecha</span>
-          <input type="date" name="fecha" min="{{ min_date }}" max="{{ max_date }}" value="{{ max_date }}">
+          <input type="date" name="fecha" min="{{ min_date }}" max="{{ max_date }}" value="{{ max_date }}" aria-label="Fecha" data-i18n-aria-label="filters.date">
         </label>
         <label class="check date-all-option">
           <input type="checkbox" data-all-dates>
@@ -138,9 +129,6 @@
       </div>
     </form>
     <div class="sidebar-theme-section preferences-section">
-      <div class="sidebar-section-head">
-        <p class="eyebrow" data-i18n="prefs.title">Preferencias</p>
-      </div>
       <button type="button" class="preference-nav-button" data-view-target="sources" aria-label="Fuentes" data-i18n-aria-label="nav.sources">
         <span>
           <strong data-i18n="nav.sources">Fuentes</strong>
@@ -285,7 +273,7 @@
         <article class="source-preference-row" data-source-row="{{ source }}">
           <div class="source-preference-copy">
             <strong>{{ source }}</strong>
-            <span data-i18n="sources.role.{{ source|replace(' ', '') }}">Señal de fuente</span>
+            <a class="source-preference-link" href="{{ source_links[source] }}" target="_blank" rel="noreferrer">{{ source_links[source] }}</a>
           </div>
           <div class="source-preference-toggle" role="group" aria-label="{{ source }}">
             <button type="button" data-source-preference="{{ source }}" data-source-value="prioritized" aria-pressed="false" data-i18n="sources.prioritized">Prioritaria</button>
@@ -341,6 +329,6 @@
     <img id="media-modal-image" alt="">
   </div>
 
-  <script src="/static/app.js?v=thirty-day-window-v1"></script>
+  <script src="/static/app.js?v=brief-meta-v1"></script>
 </body>
 </html>

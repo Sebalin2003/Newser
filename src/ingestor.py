@@ -25,9 +25,10 @@ import hashlib
 import logging
 import re
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
+from zoneinfo import ZoneInfo
 
 import feedparser
 import requests
@@ -49,6 +50,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 CONFIG_PATH: Path = Path(__file__).parent.parent / "config.yaml"
+BRIEF_TIMEZONE = ZoneInfo("America/Argentina/Buenos_Aires")
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -81,6 +83,21 @@ def _calcular_hash_diario(titulo: str, url: str, fecha: str | None = None) -> st
 
 def _ahora_utc() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def _github_local_date(value: datetime | None) -> date:
+    value = value or _ahora_utc()
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(BRIEF_TIMEZONE).date()
+
+
+def _canonical_github_url(url: str | None) -> str:
+    match = re.match(r"^https?://github\.com/([^/\s]+)/([^/\s#?]+)/?", str(url or "").strip(), re.IGNORECASE)
+    if not match:
+        return str(url or "").strip().rstrip("/").lower()
+    owner, repo = match.groups()
+    return f"https://github.com/{owner.lower()}/{repo.lower()}"
 
 
 def _es_relevante(titulo: str, descripcion: str, areas_interes: dict) -> tuple[bool, str]:
@@ -155,7 +172,7 @@ def _worker_global_news(
     areas_interes: dict,
 ) -> tuple[list[Noticia], dict]:
     nombre = fuente_cfg.get("nombre", "Global IT Brief")
-    max_items = app_cfg.get("global_news_count", 15)
+    max_items = app_cfg.get("global_news_count", 40)
     timeout = app_cfg.get("timeout_request", 15)
     metricas = _metricas_vacias(nombre)
 
@@ -236,7 +253,7 @@ def _worker_github(
             full_name = link_tag.get("href", "").strip("/")  # "owner/repo"
             if not full_name or "/" not in full_name:
                 continue
-            url_repo = f"https://github.com/{full_name}"
+            url_repo = _canonical_github_url(f"https://github.com/{full_name}")
 
             # --- Descripción ---
             p_tag = article.select_one("p")
@@ -256,7 +273,7 @@ def _worker_github(
             # --- Estrellas ganadas en el período (métrica de trending) ---
             period_span = article.select_one("span.d-inline-block.float-sm-right")
             stars_periodo = 0
-            period_label = f"stars {'today' if since == 'daily' else 'this week'}"
+            period_label = "today" if since == "daily" else "this week"
             if period_span:
                 period_text = period_span.get_text(strip=True)
                 m = re.search(r"([\d,]+)", period_text)
@@ -282,10 +299,11 @@ def _worker_github(
             titulo = (
                 f"[GitHub] {full_name} "
                 f"⭐{total_stars:,} "
-                f"(+{stars_periodo:,} {period_label})"
+                f"(+{stars_periodo:,} stars {period_label})"
             )
 
-            id_hash = _calcular_hash_diario(full_name, url_repo)
+            now = _ahora_utc()
+            id_hash = _calcular_hash(full_name, url_repo)
             noticias.append(Noticia(
                 id=id_hash,
                 titulo=titulo,
@@ -295,8 +313,14 @@ def _worker_github(
                 descripcion_original=descripcion[:1000],
                 resumen_ia="Resumen no disponible",
                 area_matcheada=area,
-                fecha_ingesta=_ahora_utc(),
+                fecha_ingesta=now,
                 ranking=idx + 1,
+                score=stars_periodo,
+                github_total_stars=total_stars,
+                github_stars_period=stars_periodo,
+                github_period_label=period_label,
+                github_metrics_updated_at=now,
+                github_fresh_date=_github_local_date(now),
             ))
 
         # Ordenar por estrellas del período (descendente) antes de persistir
@@ -332,6 +356,79 @@ def _extraer_stars_periodo(titulo: str) -> int:
 # ---------------------------------------------------------------------------
 # Worker HN Firebase — top stories actuales (Monitoreo de Hoy)
 # ---------------------------------------------------------------------------
+
+def _merge_optional_text(current: str | None, candidate: str | None) -> str | None:
+    return current or candidate
+
+
+def _update_existing_github_repo(existing: Noticia, incoming: Noticia) -> None:
+    incoming_fresh_date = incoming.github_fresh_date or _github_local_date(incoming.fecha_ingesta)
+    if existing.github_fresh_date != incoming_fresh_date:
+        existing.fecha_ingesta = incoming.fecha_ingesta
+        existing.github_fresh_date = incoming_fresh_date
+
+    changed = (
+        existing.ranking != incoming.ranking
+        or existing.score != incoming.score
+        or existing.github_total_stars != incoming.github_total_stars
+        or existing.github_stars_period != incoming.github_stars_period
+        or existing.github_period_label != incoming.github_period_label
+    )
+
+    existing.titulo = incoming.titulo
+    existing.url = _canonical_github_url(incoming.url)
+    existing.descripcion_original = incoming.descripcion_original
+    existing.area_matcheada = incoming.area_matcheada
+    existing.fecha_publicacion = None
+    existing.ranking = incoming.ranking
+    existing.score = incoming.score
+    existing.github_total_stars = incoming.github_total_stars
+    existing.github_stars_period = incoming.github_stars_period
+    existing.github_period_label = incoming.github_period_label
+    existing.github_metrics_updated_at = incoming.github_metrics_updated_at or incoming.fecha_ingesta
+
+    if changed:
+        existing.selected_score = None
+        existing.score_components_json = None
+        existing.tags_json = None
+        existing.selection_reason = None
+        existing.scored_at = None
+        existing.score_version = None
+
+
+def _merge_duplicate_github_repos(session: Any) -> int:
+    if not hasattr(session, "query"):
+        return 0
+    query = session.query(Noticia).filter(Noticia.fuente == "GitHub Trending")
+    if not hasattr(query, "all"):
+        return 0
+    rows = query.all()
+    grouped: dict[str, list[Noticia]] = {}
+    for row in rows:
+        key = _canonical_github_url(row.url)
+        if key:
+            grouped.setdefault(key, []).append(row)
+
+    removed = 0
+    for group in grouped.values():
+        if len(group) < 2:
+            continue
+        group.sort(key=lambda n: (int(bool(n.is_favorite)), n.fecha_ingesta or datetime.min), reverse=True)
+        keep = group[0]
+        latest = max(group, key=lambda n: n.github_metrics_updated_at or n.fecha_ingesta or datetime.min)
+        keep.is_favorite = max(int(n.is_favorite or 0) for n in group)
+        keep.favorited_at = max((n.favorited_at for n in group if n.favorited_at), default=keep.favorited_at)
+        keep.resumen_ia = _merge_optional_text(keep.resumen_ia, next((n.resumen_ia for n in group if n.resumen_ia), None))
+        keep.resumen_ia_en = _merge_optional_text(keep.resumen_ia_en, next((n.resumen_ia_en for n in group if n.resumen_ia_en), None))
+        keep.media_url = _merge_optional_text(keep.media_url, next((n.media_url for n in group if n.media_url), None))
+        keep.media_type = _merge_optional_text(keep.media_type, next((n.media_type for n in group if n.media_type), None))
+        keep.media_source_url = _merge_optional_text(keep.media_source_url, next((n.media_source_url for n in group if n.media_source_url), None))
+        _update_existing_github_repo(keep, latest)
+        for duplicate in group[1:]:
+            session.delete(duplicate)
+            removed += 1
+    return removed
+
 
 def _worker_hn(
     fuente_cfg: dict,
@@ -709,6 +806,12 @@ def ejecutar_ingesta(progress_callback: Callable[[str], None] | None = None) -> 
         with get_session() as session:
             for noticia in noticias_unicas.values():
                 existing = session.get(Noticia, noticia.id)
+                if existing is None and noticia.fuente == "GitHub Trending" and noticia.url:
+                    existing = (
+                        session.query(Noticia)
+                        .filter(Noticia.fuente == "GitHub Trending", Noticia.url == _canonical_github_url(noticia.url))
+                        .first()
+                    )
                 if existing is None:
                     session.add(noticia)
                     metricas["nuevas_persistidas"] += 1
@@ -720,23 +823,11 @@ def ejecutar_ingesta(progress_callback: Callable[[str], None] | None = None) -> 
                         existing.media_type = noticia.media_type
                         existing.media_source_url = noticia.media_source_url
                     if noticia.fuente == "GitHub Trending":
-                        existing.titulo = noticia.titulo
-                        existing.url = noticia.url
-                        existing.descripcion_original = noticia.descripcion_original
-                        existing.area_matcheada = noticia.area_matcheada
-                        existing.fecha_ingesta = noticia.fecha_ingesta
-                        existing.fecha_publicacion = None
-                        existing.ranking = noticia.ranking
-                        existing.score = noticia.score
-                        existing.selected_score = None
-                        existing.score_components_json = None
-                        existing.tags_json = None
-                        existing.selection_reason = None
-                        existing.scored_at = None
-                        existing.score_version = None
+                        _update_existing_github_repo(existing, noticia)
                     elif existing.fecha_publicacion is None and noticia.fecha_publicacion is not None:
                         existing.fecha_publicacion = noticia.fecha_publicacion
                     metricas["duplicadas_omitidas"] += 1
+            metricas["duplicadas_omitidas"] += _merge_duplicate_github_repos(session)
             session.commit()
 
     msg_fin = (

@@ -191,6 +191,16 @@ class WebServiceTestCase(unittest.TestCase):
         self.assertEqual(all_result["fecha"], "all")
         self.assertEqual(all_result["hot_topics"], [])
 
+    def test_feed_excludes_low_relevance_scores(self) -> None:
+        today = datetime.now(web_services.BRIEF_TIMEZONE).date().isoformat()
+        self.add_article("technical", "Developer SDK release", "GitHub Blog", "developer_tools", 60)
+        self.add_article("off-topic", "Celebrity opens public library", "Hacker News", "developer_tools", 48)
+
+        ids = [item["id"] for item in web_services.get_feed(fecha=today)["items"]]
+
+        self.assertIn("technical", ids)
+        self.assertNotIn("off-topic", ids)
+
     def test_feed_deduplicates_repeated_articles_by_url_after_sorting(self) -> None:
         today = datetime.now(web_services.BRIEF_TIMEZONE).date().isoformat()
         repo_url = "https://github.com/calesthio/OpenMontage"
@@ -268,6 +278,17 @@ class WebServiceTestCase(unittest.TestCase):
         self.assertEqual(result["hot_topics"][0]["topic"], "OpenAI")
         self.assertEqual(result["hot_topics"][0]["source_count"], 3)
 
+    def test_search_feed_skips_hot_topic_clustering(self) -> None:
+        today = datetime.now(web_services.BRIEF_TIMEZONE).date().isoformat()
+        self.add_article("agent-search", "Agent runtime search", "OpenAI Blog", "ai_agents", 80)
+
+        with patch.object(web_services, "get_hot_topics") as hot_topics:
+            result = web_services.get_feed(fecha=today, q="agent")
+
+        hot_topics.assert_not_called()
+        self.assertEqual([item["id"] for item in result["items"]], ["agent-search"])
+        self.assertEqual(result["hot_topics"], [])
+
     def test_hot_topics_sort_by_source_count_then_score(self) -> None:
         today = datetime.now(web_services.BRIEF_TIMEZONE).date()
         for article_id, source, score in [
@@ -293,6 +314,31 @@ class WebServiceTestCase(unittest.TestCase):
         self.add_article("only-two-b", "Security incident analysis", "Hacker News", "cybersecurity", 81)
 
         self.assertEqual(web_services.get_hot_topics(today), [])
+
+    def test_hot_topics_limit_is_applied_after_selected_date_filter(self) -> None:
+        today = datetime.now(web_services.BRIEF_TIMEZONE).date()
+        yesterday = today - timedelta(days=1)
+        for index in range(web_services.HOT_TOPIC_QUERY_LIMIT + 5):
+            self.add_article(
+                f"yesterday-{index}",
+                f"Yesterday unrelated platform story {index}",
+                "GitHub Trending",
+                "developer_tools",
+                99,
+                published_at=datetime(yesterday.year, yesterday.month, yesterday.day, 12, tzinfo=timezone.utc),
+                ingested_at=datetime(yesterday.year, yesterday.month, yesterday.day, 12, tzinfo=timezone.utc),
+            )
+        for article_id, source, score in [
+            ("today-openai-r", "Reuters", 70),
+            ("today-openai-o", "OpenAI Blog", 69),
+            ("today-openai-h", "Hacker News", 68),
+        ]:
+            self.add_article(article_id, "OpenAI agent launch details", source, "ai_agents", score)
+
+        topics = web_services.get_hot_topics(today)
+
+        self.assertEqual([topic["topic"] for topic in topics], ["OpenAI"])
+        self.assertEqual(topics[0]["source_count"], 3)
 
     def test_brief_returns_structured_json_when_available(self) -> None:
         today = datetime.now(web_services.BRIEF_TIMEZONE).date()
@@ -324,6 +370,17 @@ class WebServiceTestCase(unittest.TestCase):
 
         self.assertFalse(result["ok"])
         self.assertIn("GEMINI_API_KEY", result["reason"])
+
+    def test_summary_generation_uses_article_language_lock(self) -> None:
+        self.add_article("locked-summary", "Needs summary", "Reuters", "general", 60)
+
+        with patch.dict(os.environ, {"GEMINI_API_KEY": "key"}, clear=False), \
+             patch.object(web_services, "_get_summary_lock", wraps=web_services._get_summary_lock) as get_lock, \
+             patch("src.processor.generar_resumen_individual", return_value={"ok": True, "summary": "Done"}):
+            result = web_services.generate_summary("locked-summary", lang="en")
+
+        self.assertTrue(result["ok"])
+        get_lock.assert_called_once_with("locked-summary", "en")
 
     def test_feed_uses_language_specific_summary_and_area_label(self) -> None:
         today = datetime.now(web_services.BRIEF_TIMEZONE).date().isoformat()
@@ -419,19 +476,23 @@ class WebServiceTestCase(unittest.TestCase):
 
         self.assertEqual(web_services.get_suggestions("a"), [])
 
-        with patch.object(web_services, "parse_filter_date", return_value=date.fromisoformat(today)):
+        with (
+            patch.object(web_services, "parse_filter_date", return_value=date.fromisoformat(today)),
+            patch.object(web_services, "get_feed") as get_feed,
+        ):
             suggestions = web_services.get_suggestions("agent")
+        get_feed.assert_not_called()
         all_date_suggestions = web_services.get_suggestions("older", fecha="all")
 
         self.assertEqual(len(suggestions), 5)
         self.assertEqual([item["score"] for item in suggestions], [90.0, 80.0, 70.0, 60.0, 50.0])
         self.assertEqual([item["id"] for item in all_date_suggestions], ["older-window-item"])
 
-    def test_feed_staleness_uses_thirty_minute_threshold(self) -> None:
+    def test_feed_staleness_uses_one_hour_threshold(self) -> None:
         now = datetime.now(timezone.utc)
 
-        self.assertFalse(web_services.is_feed_stale(now - timedelta(minutes=29), now))
-        self.assertTrue(web_services.is_feed_stale(now - timedelta(minutes=30), now))
+        self.assertFalse(web_services.is_feed_stale(now - timedelta(minutes=59), now))
+        self.assertTrue(web_services.is_feed_stale(now - timedelta(hours=1), now))
         self.assertTrue(web_services.is_feed_stale(None, now))
 
     def test_refresh_lock_prevents_concurrent_refreshes(self) -> None:
@@ -473,6 +534,62 @@ class WebServiceTestCase(unittest.TestCase):
         ):
             self.assertTrue(web_services.ensure_daily_brief_catchup(background=False))
             generate.assert_called_once()
+
+    def test_english_brief_generation_does_not_block_request(self) -> None:
+        today = datetime.now(web_services.BRIEF_TIMEZONE).date()
+        self.add_brief(today, "Resumen español")
+
+        with (
+            patch.object(web_services, "ensure_english_daily_brief", return_value=True) as ensure,
+            patch("src.processor.generar_macro_resumen_dia") as generate,
+        ):
+            result = web_services.get_brief(today.isoformat(), lang="en")
+
+        self.assertFalse(result["available"])
+        self.assertTrue(result["catchup_started"])
+        ensure.assert_called_once_with(background=True)
+        generate.assert_not_called()
+
+    def test_english_daily_brief_job_uses_english_generation(self) -> None:
+        with patch("src.processor.generar_macro_resumen_dia", return_value={"macro_resumen_generado": True}) as generate:
+            result = web_services.generate_english_daily_brief_job()
+
+        self.assertTrue(result["macro_resumen_generado"])
+        self.assertEqual(generate.call_args.kwargs["language"], "en")
+        self.assertIsNone(generate.call_args.kwargs["target_date"])
+
+    def test_english_daily_brief_job_can_target_archive_date(self) -> None:
+        brief_date = date(2026, 7, 7)
+
+        with patch("src.processor.generar_macro_resumen_dia", return_value={"macro_resumen_generado": True}) as generate:
+            web_services.generate_english_daily_brief_job(brief_date)
+
+        self.assertEqual(generate.call_args.kwargs["language"], "en")
+        self.assertEqual(generate.call_args.kwargs["target_date"], brief_date)
+
+    def test_daily_brief_job_generates_spanish_and_english(self) -> None:
+        with (
+            patch.object(web_services, "refresh_feed", return_value={"ok": True}) as refresh,
+            patch("src.processor.ejecutar_procesamiento", return_value={"macro_resumen_generado": True, "lang": "es"}) as spanish,
+            patch.object(web_services, "generate_english_daily_brief_job", return_value={"macro_resumen_generado": True, "lang": "en"}) as english,
+        ):
+            result = web_services.generate_daily_brief_job()
+
+        refresh.assert_called_once()
+        spanish.assert_called_once()
+        english.assert_called_once()
+        self.assertEqual(result["spanish"]["lang"], "es")
+        self.assertEqual(result["english"]["lang"], "en")
+
+    def test_english_archive_starts_backfill_for_missing_english_brief(self) -> None:
+        today = date(2026, 7, 8)
+        self.add_brief(date(2026, 7, 7), "Resumen español")
+
+        with patch.object(web_services, "ensure_english_daily_brief", return_value=True) as ensure:
+            result = web_services.get_past_daily_briefs(today=today, lang="en")
+
+        self.assertEqual(result["items"], [])
+        ensure.assert_called_once_with(background=True, brief_date=date(2026, 7, 7))
 
     def test_favorite_columns_are_declared(self) -> None:
         columns = {column["name"] for column in inspect(self.engine).get_columns("noticias")}
@@ -730,6 +847,7 @@ class WebApiRouteTests(unittest.TestCase):
         scheduler = web_app.create_scheduler()
         try:
             self.assertIsNotNone(scheduler.get_job(web_app.REFRESH_JOB_ID))
+            self.assertEqual(str(scheduler.get_job(web_app.REFRESH_JOB_ID).trigger), "interval[1:00:00]")
             daily_job = scheduler.get_job(web_app.DAILY_BRIEF_JOB_ID)
             self.assertIsNotNone(daily_job)
             self.assertEqual(str(daily_job.trigger), "cron[hour='8', minute='0']")
@@ -756,6 +874,8 @@ class WebUiStaticTests(unittest.TestCase):
         self.assertIn("setSearchMode(searchActive)", script)
         self.assertIn('section.hidden = active', script)
         self.assertIn('if (!searchActive)', script)
+        self.assertIn("feedAbortController?.abort()", script)
+        self.assertIn('error.name !== "AbortError"', script)
 
     def test_search_enter_submits_query(self) -> None:
         script = Path("static/app.js").read_text(encoding="utf-8")
@@ -765,8 +885,20 @@ class WebUiStaticTests(unittest.TestCase):
         self.assertIn("event.preventDefault()", script)
         input_handler = script.split('search.addEventListener("input"', maxsplit=1)[1].split('search.addEventListener("keydown"', maxsplit=1)[0]
         self.assertIn("loadSuggestions();", input_handler)
-        self.assertNotIn("state.query = search.value.trim()", input_handler)
-        self.assertNotIn("loadAll();\n  }, 250)", input_handler)
+        self.assertNotIn("state.query =", input_handler)
+        self.assertNotIn("loadAll();", input_handler)
+        self.assertNotIn("setTimeout", input_handler)
+
+    def test_search_suggestions_abort_stale_requests(self) -> None:
+        script = Path("static/app.js").read_text(encoding="utf-8")
+
+        self.assertIn("function hideSuggestions()", script)
+        self.assertIn("let suggestionAbortController = null", script)
+        self.assertIn("suggestionAbortController?.abort()", script)
+        self.assertIn("requestId !== suggestionRequestId", script)
+        self.assertIn('document.addEventListener("click"', script)
+        self.assertIn('event.target instanceof Element && event.target.closest(".search")', script)
+        self.assertIn("hideSuggestions();", script)
 
     def test_daily_briefs_mode_ui_is_present(self) -> None:
         template = Path("templates/index.html").read_text(encoding="utf-8")
@@ -785,8 +917,6 @@ class WebUiStaticTests(unittest.TestCase):
         self.assertIn('aria-label="Actualizaciones de hoy"', template)
         self.assertIn("Briefs diarios", template)
         self.assertIn("Favoritos", template)
-        self.assertIn("Espacio de trabajo", template)
-        self.assertIn("Controles del feed", template)
         self.assertIn("Fuentes", template)
         self.assertIn('data-view-target="today"', template)
         self.assertIn('data-view-target="briefs"', template)
@@ -801,6 +931,12 @@ class WebUiStaticTests(unittest.TestCase):
         self.assertIn("Resumen ejecutivo", template)
         self.assertIn("Briefs diarios anteriores", template)
         workspace_nav = template.split('class="sidebar-section mode-nav"', maxsplit=1)[1].split("</nav>", maxsplit=1)[0]
+        feed_controls = template.split('class="sidebar-section feed-controls"', maxsplit=1)[1].split("</div>\n    </form>", maxsplit=1)[0]
+        sidebar_preferences = template.split('class="sidebar-theme-section preferences-section"', maxsplit=1)[1].split("</aside>", maxsplit=1)[0]
+        self.assertNotIn("Espacio de trabajo", workspace_nav)
+        self.assertNotIn("Controles del feed", feed_controls)
+        self.assertNotIn("Preferencias", sidebar_preferences)
+        self.assertNotIn("data-date-mode-label", template)
         self.assertNotIn("Artículos, repositorios, temas y búsqueda en vivo.", workspace_nav)
         self.assertNotIn("Resumen ejecutivo de hoy y últimos 7 días.", workspace_nav)
         self.assertNotIn("Artículos y repositorios guardados.", workspace_nav)
@@ -809,9 +945,16 @@ class WebUiStaticTests(unittest.TestCase):
         self.assertNotIn("últimos 7 días", script)
         self.assertNotIn("previous 7 days", script)
         self.assertIn("loadDailyBriefs", script)
+        self.assertIn("let dailyBriefRequestId = 0", script)
+        self.assertIn("const requestId = ++dailyBriefRequestId", script)
+        self.assertIn("const requestLanguage = state.language", script)
+        self.assertIn('requestLanguage !== state.language || state.view !== "briefs"', script)
+        self.assertIn("if (requestId === dailyBriefRequestId)", script)
         self.assertIn("loadFavorites", script)
         self.assertIn('fetchJson(withLanguage("/api/brief"))', script)
         self.assertIn("/api/daily-briefs", script)
+        self.assertNotIn("formatDate(data.fecha_generacion)", script)
+        self.assertNotIn("formatDate(item.fecha_generacion)", script)
         self.assertIn("/api/favorites", script)
         self.assertIn("/favorite", script)
         self.assertIn("favorite-button", script)
@@ -822,6 +965,14 @@ class WebUiStaticTests(unittest.TestCase):
         self.assertIn("summary-button", script)
         self.assertIn("summary-spinner", script)
         self.assertIn("is-generating", script)
+        self.assertIn("const summaryRequests = new Map()", script)
+        self.assertIn('"article.generating": "Generating..."', script)
+        self.assertIn("function setSummaryLoading", script)
+        self.assertIn("if (summaryRequests.has(articleId))", script)
+        self.assertIn("summaryRequests.delete(articleId)", script)
+        self.assertNotIn('"status.generatingSummary"', script)
+        generate_summary_block = script.split("async function generateSummary", maxsplit=1)[1].split("async function toggleFavorite", maxsplit=1)[0]
+        self.assertNotIn("setStatus(i18n(\"status.generatingSummary\"))", generate_summary_block)
         self.assertIn('button.setAttribute("aria-busy", "true")', script)
         self.assertIn("function applyGeneratedSummary", script)
         self.assertNotIn("escapeHtml(summary).slice(0, 420)", script)
@@ -841,8 +992,8 @@ class WebUiStaticTests(unittest.TestCase):
         self.assertIn("Usá el botón de corazón", script)
         self.assertNotIn("Saved to favorites.", script)
         self.assertNotIn("Removed from favorites.", script)
-        self.assertIn("/static/app.js?v=thirty-day-window-v1", template)
-        self.assertIn("/static/app.css?v=final-polish-v1", template)
+        self.assertIn("/static/app.js?v=brief-meta-v1", template)
+        self.assertIn("/static/app.css?v=brief-meta-v1", template)
         self.assertIn('placeholder="Buscar"', template)
         self.assertIn('"search.placeholder": "Buscar"', script)
         self.assertIn('"search.placeholder": "Search"', script)
@@ -871,6 +1022,9 @@ class WebUiStaticTests(unittest.TestCase):
         self.assertIn('id="topbar-date"', template)
         self.assertIn("data-all-dates", template)
         self.assertIn("date-all-option", template)
+        feed_controls = template.split('class="sidebar-section feed-controls"', maxsplit=1)[1].split("</div>\n    </form>", maxsplit=1)[0]
+        self.assertNotIn('data-i18n="filters.date"', feed_controls)
+        self.assertIn('data-i18n-aria-label="filters.date"', feed_controls)
         self.assertNotIn('id="topbar-subtitle"', template)
         self.assertIn("topbarTitle.textContent", script)
         self.assertIn("function updateTopbarTitle()", script)
@@ -878,8 +1032,10 @@ class WebUiStaticTests(unittest.TestCase):
         self.assertIn('params.set("fecha", "all")', script)
         self.assertIn("function syncDateMode()", script)
         self.assertIn("dateInput.disabled = allDates", script)
-        self.assertIn('dateModeLabel.textContent = allDates ? i18n("date.all") : i18n("date.today")', script)
+        self.assertNotIn("dateModeLabel", script)
         self.assertIn(".date-all-option", styles)
+        filters_styles = styles.split("\n.filters {", maxsplit=1)[1].split("}", maxsplit=1)[0]
+        self.assertIn("margin-bottom: 22px", filters_styles)
         self.assertIn("input:disabled", styles)
         self.assertNotIn('"brief.subtitle"', script)
         self.assertIn('"brief.generating": "Today\'s brief is being generated.', script)
@@ -948,11 +1104,14 @@ class WebUiStaticTests(unittest.TestCase):
         self.assertNotIn("Cambiar tema", preferences_section)
         self.assertIn('data-view-target="sources"', template)
         self.assertIn('id="source-preferences"', template)
-        self.assertIn("/static/app.css?v=final-polish-v1", template)
+        self.assertIn("/static/app.css?v=brief-meta-v1", template)
         source_preferences = template.split('id="source-preferences"', maxsplit=1)[1].split("</section>", maxsplit=1)[0]
         self.assertNotIn('data-i18n="sources.kicker"', source_preferences)
         self.assertNotIn('data-i18n="sources.title"', source_preferences)
         self.assertNotIn('data-i18n="sources.description"', source_preferences)
+        self.assertNotIn('data-i18n="sources.role.', source_preferences)
+        self.assertIn('class="source-preference-link"', source_preferences)
+        self.assertIn('href="{{ source_links[source] }}"', source_preferences)
         self.assertIn('class="source-apply-button"', template)
         self.assertIn('class="source-apply-icon"', template)
         self.assertIn('data-source-apply-label', template)
@@ -982,6 +1141,11 @@ class WebUiStaticTests(unittest.TestCase):
         self.assertIn("function defaultSourcePreferences()", script)
         self.assertIn("function applySourcePreferencesToFilters()", script)
         self.assertIn("appliedSourcePreferences", script)
+        self.assertIn("pendingLoad: false", script)
+        self.assertIn("state.pendingLoad = true", script)
+        self.assertIn("if (state.pendingLoad)", script)
+        self.assertIn("const hasRenderedFeed = Boolean(feed.children.length)", script)
+        self.assertIn("if (!hasRenderedFeed) document.body.classList.add(\"is-loading\")", script)
         self.assertIn("state.appliedSourcePreferences = { ...state.sourcePreferences }", script)
         self.assertIn("saveSourcePreferences();", script)
         self.assertIn("function syncSourceFilterVisibility()", script)
@@ -1031,6 +1195,7 @@ class WebUiStaticTests(unittest.TestCase):
         self.assertIn("gap: 9px", preferences_styles)
         self.assertIn(".source-preferences-view", styles)
         self.assertIn(".source-apply-button.is-confirmed", styles)
+        self.assertIn(".source-preference-link", styles)
         self.assertIn(".source-preference-toggle", styles)
         self.assertIn(".source-preference-badge", styles)
 
@@ -1039,9 +1204,17 @@ class WebUiStaticTests(unittest.TestCase):
         styles = Path("static/app.css").read_text(encoding="utf-8")
 
         self.assertIn('"topics.empty": "No multi-source hot topics for this date yet."', script)
+        self.assertIn('document.querySelector("#topics-panel")', script)
+        self.assertIn("panel.hidden = true", script)
+        self.assertIn("panel.hidden = false", script)
+        self.assertNotIn('hotTopics.innerHTML = `<div class="empty">${i18n("topics.empty")}</div>`', script)
         self.assertIn("topic.sources", script)
         self.assertIn("topic.supporting_items", script)
         self.assertIn('"topics.supporting": "Supporting articles"', script)
+        self.assertIn("function hideHotTopics()", script)
+        self.assertIn("hideHotTopics();\n    feedAbortController?.abort();", script)
+        self.assertIn("setSearchMode(searchActive);\n  hideHotTopics();", script)
+        self.assertIn("hideHotTopics();\n    return;", script)
         self.assertIn("topic-source-chip", script)
         self.assertIn("topic-support-item", script)
         self.assertIn(".topic-source-chip", styles)
@@ -1066,6 +1239,9 @@ class WebUiStaticTests(unittest.TestCase):
         self.assertIn("brand-tagline", brand_block)
         self.assertIn("Analizador de tendencias IT", brand_block)
         self.assertIn("IT News Trend Analyzer", script)
+        self.assertIn('html[data-theme="light"] .brand img', styles)
+        self.assertIn('html[data-theme="light"] .mobile-brand img', styles)
+        self.assertIn("drop-shadow(0 1px 0 rgba(23, 33, 49, 0.72))", styles)
         self.assertNotIn('id="theme-toggle"', brand_block)
         self.assertIn('id="desktop-theme-toggle"', template)
         self.assertIn("sidebar-theme-section", template)

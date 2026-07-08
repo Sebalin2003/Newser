@@ -10,7 +10,8 @@ STRONG_RELEVANCE_KEYWORDS = (
     "phishing", "exploit", "zero-day", "threat actor", "semiconductor",
     "gpu", "nvidia", "amd", "intel", "tsmc", "hbm", "kubernetes", "docker",
     "terraform", "data pipeline", "platform engineering", "compiler", "runtime",
-    "sdk", "cli", "framework", "library",
+    "sdk", "cli", "framework", "software library", "python library",
+    "javascript library",
 )
 
 WEAK_RELEVANCE_KEYWORDS = (

@@ -19,7 +19,7 @@ app:
   # --- Ingesta HN histórica (Algolia API) ---
   hn_algolia_min_score: 50    # Umbral más bajo que Firebase (histórico 7d)
   hn_algolia_count: 100       # Stories históricas a recuperar por ronda
-  global_news_count: 15       # Reuters + GitHub Blog + OpenAI Blog para el feed local
+  global_news_count: 40       # Reuters + GitHub Blog + OpenAI Blog + Hugging Face Blog para el feed local
 
 # -----------------------------------------------------------------------------
 # Fuentes de Datos (PRD Developer Pulse Edition)
@@ -42,7 +42,7 @@ fuentes:
     peso_plataforma: 1.2
 
   - nombre: "Global IT Brief"
-    url: "curated://reuters-github-openai"
+    url: "curated://reuters-github-openai-huggingface"
     tipo: global_news
     activa: true
     autoridad: 0.92
@@ -93,7 +93,9 @@ areas_interes:
     - "compiler"
     - "runtime"
     - "framework"
-    - "library"
+    - "software library"
+    - "python library"
+    - "javascript library"
     - "sdk"
     - "api"
     - "cli"

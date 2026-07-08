@@ -1,11 +1,18 @@
 const state = {
   query: "",
   loading: false,
+  pendingLoad: false,
   view: "today",
   language: window.localStorage.getItem("newser.language") === "en" ? "en" : "es",
   sourcePreferences: {},
   appliedSourcePreferences: {},
 };
+const summaryRequests = new Map();
+let dailyBriefRequestId = 0;
+let feedRequestId = 0;
+let feedAbortController = null;
+let suggestionRequestId = 0;
+let suggestionAbortController = null;
 
 const I18N = {
   es: {
@@ -13,13 +20,11 @@ const I18N = {
     "sidebar.collapse": "Contraer barra lateral",
     "sidebar.expand": "Expandir barra lateral",
     "nav.main": "Navegación principal",
-    "nav.workspace": "Espacio de trabajo",
     "nav.today": "Actualizaciones de hoy",
     "nav.briefs": "Briefs diarios",
     "nav.favorites": "Favoritos",
     "nav.sources": "Fuentes",
     "nav.more": "Más",
-    "filters.title": "Controles del feed",
     "filters.date": "Fecha",
     "filters.today": "Hoy",
     "filters.allDates": "Todas las fechas",
@@ -54,9 +59,6 @@ const I18N = {
     "status.loadingSources": "Cargando preferencias de fuentes...",
     "status.sourcesApplied": "Preferencias aplicadas a los filtros.",
     "status.sourcesReset": "Preferencias de fuentes restablecidas.",
-    "status.generatingSummary": "Generando resumen...",
-    "status.summaryCached": "El resumen ya existe.",
-    "status.summaryGenerated": "Resumen generado.",
     "error.requestFailed": "La solicitud falló.",
     "date.today": "Hoy",
     "date.all": "Todas las fechas",
@@ -90,6 +92,7 @@ const I18N = {
     "article.openVideo": "Abrir fuente del video",
     "article.preview": "Vista previa de imagen del artículo",
     "article.generate": "Generar resumen",
+    "article.generating": "Generando...",
     "article.addFavorite": "Agregar a favoritos",
     "article.removeFavorite": "Quitar de favoritos",
     "article.starsToday": "estrellas hoy",
@@ -132,13 +135,11 @@ const I18N = {
     "sidebar.collapse": "Collapse sidebar",
     "sidebar.expand": "Expand sidebar",
     "nav.main": "Main navigation",
-    "nav.workspace": "Workspace",
     "nav.today": "Today's Updates",
     "nav.briefs": "Daily Briefs",
     "nav.favorites": "Favorites",
     "nav.sources": "Sources",
     "nav.more": "More",
-    "filters.title": "Feed controls",
     "filters.date": "Date",
     "filters.today": "Today",
     "filters.allDates": "All dates",
@@ -173,9 +174,6 @@ const I18N = {
     "status.loadingSources": "Loading source preferences...",
     "status.sourcesApplied": "Source preferences applied to filters.",
     "status.sourcesReset": "Source preferences reset.",
-    "status.generatingSummary": "Generating summary...",
-    "status.summaryCached": "Summary already exists.",
-    "status.summaryGenerated": "Summary generated.",
     "error.requestFailed": "Request failed.",
     "date.today": "Today",
     "date.all": "All dates",
@@ -209,6 +207,7 @@ const I18N = {
     "article.openVideo": "Open video source",
     "article.preview": "Article image preview",
     "article.generate": "Generate summary",
+    "article.generating": "Generating...",
     "article.addFavorite": "Add to favorites",
     "article.removeFavorite": "Remove from favorites",
     "article.starsToday": "stars today",
@@ -264,7 +263,6 @@ const topbarTitle = document.querySelector(".topbar h2");
 const topbarTitleMain = document.querySelector("#topbar-title-main");
 const topbarDate = document.querySelector("#topbar-date");
 const allDatesToggle = document.querySelector("[data-all-dates]");
-const dateModeLabel = document.querySelector("[data-date-mode-label]");
 const stats = document.querySelector("#stats");
 const brief = document.querySelector("#brief");
 const hotTopics = document.querySelector("#hot-topics");
@@ -593,7 +591,6 @@ function syncDateMode() {
   const dateInput = filters.querySelector('input[name="fecha"]');
   const allDates = Boolean(allDatesToggle?.checked);
   if (dateInput) dateInput.disabled = allDates;
-  if (dateModeLabel) dateModeLabel.textContent = allDates ? i18n("date.all") : i18n("date.today");
   updateTopbarTitle();
 }
 
@@ -629,31 +626,54 @@ async function loadAll() {
     updateTopbarTitle();
     return;
   }
-  if (state.loading) return;
+  if (state.loading) {
+    state.pendingLoad = true;
+    hideHotTopics();
+    feedAbortController?.abort();
+    return;
+  }
+  const requestId = ++feedRequestId;
+  feedAbortController = new AbortController();
+  const hasRenderedFeed = Boolean(feed.children.length);
   updateTopbarTitle();
   state.loading = true;
-  document.body.classList.add("is-loading");
+  if (!hasRenderedFeed) document.body.classList.add("is-loading");
   const searchActive = Boolean(state.query);
   setSearchMode(searchActive);
-  setStatus(searchActive ? i18n("status.loadingSearch") : i18n("status.loadingDashboard"));
+  hideHotTopics();
+  if (!hasRenderedFeed) {
+    setStatus(searchActive ? i18n("status.loadingSearch") : i18n("status.loadingDashboard"));
+  }
   try {
     const params = formParams();
-    const feedData = await fetchJson(`/api/feed?${params}`);
+    const feedData = await fetchJson(`/api/feed?${params}`, { signal: feedAbortController.signal });
+    if (requestId !== feedRequestId) return;
     if (!searchActive) {
       renderHotTopics(feedData.hot_topics || []);
     }
     renderFeed(feedData);
     setStatus("");
   } catch (error) {
-    setStatus(error.message, true);
+    if (error.name !== "AbortError") {
+      setStatus(error.message, true);
+    }
   } finally {
-    state.loading = false;
-    document.body.classList.remove("is-loading");
+    if (requestId === feedRequestId) {
+      feedAbortController = null;
+      state.loading = false;
+      document.body.classList.remove("is-loading");
+    }
+    if (state.pendingLoad) {
+      state.pendingLoad = false;
+      loadAll();
+    }
   }
 }
 
 async function loadDailyBriefs() {
-  if (state.loading) return;
+  if (state.loading && state.view !== "briefs") return;
+  const requestId = ++dailyBriefRequestId;
+  const requestLanguage = state.language;
   state.loading = true;
   document.body.classList.add("is-loading");
   setViewMode("briefs");
@@ -663,14 +683,18 @@ async function loadDailyBriefs() {
       fetchJson(withLanguage("/api/brief")),
       fetchJson(withLanguage("/api/daily-briefs")),
     ]);
+    if (requestId !== dailyBriefRequestId || requestLanguage !== state.language || state.view !== "briefs") return;
     renderBrief(briefData);
     renderDailyBriefs(archiveData.items || []);
     setStatus("");
   } catch (error) {
+    if (requestId !== dailyBriefRequestId || requestLanguage !== state.language || state.view !== "briefs") return;
     setStatus(error.message, true);
   } finally {
-    state.loading = false;
-    document.body.classList.remove("is-loading");
+    if (requestId === dailyBriefRequestId) {
+      state.loading = false;
+      document.body.classList.remove("is-loading");
+    }
   }
 }
 
@@ -730,6 +754,12 @@ function setSearchMode(active) {
   overviewSections.forEach((section) => {
     section.hidden = active;
   });
+}
+
+function hideHotTopics() {
+  const panel = document.querySelector("#topics-panel");
+  if (panel) panel.hidden = true;
+  hotTopics.innerHTML = "";
 }
 
 function setSidebarCollapsed(collapsed) {
@@ -850,7 +880,7 @@ function renderBrief(data) {
   } else {
     body = `<p>${escapeHtml(data.texto || "")}</p>`;
   }
-  const meta = `${escapeHtml(data.n_noticias)} ${i18n("brief.articles")} - ${escapeHtml(data.modelo)} - ${escapeHtml(formatDate(data.fecha_generacion))}`;
+  const meta = `${escapeHtml(data.n_noticias)} ${i18n("brief.articles")} - ${escapeHtml(data.modelo)}`;
   brief.innerHTML = renderCurrentBriefShell(body, meta);
   bindCurrentBriefToggle();
 }
@@ -916,7 +946,7 @@ function renderDailyBriefs(items) {
         <button class="daily-brief-toggle" type="button" data-daily-brief-toggle aria-expanded="${expanded}" aria-controls="${detailId}">
           <span>
             <strong>${escapeHtml(item.fecha)}</strong>
-            <small>${escapeHtml(item.n_noticias)} ${i18n("brief.articles")} - ${escapeHtml(item.modelo)} - ${escapeHtml(formatDate(item.fecha_generacion))}</small>
+            <small>${escapeHtml(item.n_noticias)} ${i18n("brief.articles")} - ${escapeHtml(item.modelo)}</small>
           </span>
           <span class="daily-brief-chevron" aria-hidden="true"></span>
         </button>
@@ -954,10 +984,12 @@ function renderFavorites(data) {
 }
 
 function renderHotTopics(items) {
+  const panel = document.querySelector("#topics-panel");
   if (!items.length) {
-    hotTopics.innerHTML = `<div class="empty">${i18n("topics.empty")}</div>`;
+    hideHotTopics();
     return;
   }
+  if (panel) panel.hidden = false;
   hotTopics.innerHTML = items.map(renderTopic).join("");
   hotTopics.querySelectorAll("[data-topic-toggle]").forEach((button) => {
     button.addEventListener("click", () => toggleTopicDetails(button));
@@ -1148,27 +1180,38 @@ function renderArticle(item) {
   `;
 }
 
+function setSummaryLoading(articleId, loading) {
+  document.querySelectorAll("[data-summary]").forEach((button) => {
+    if (button.dataset.summary !== articleId) return;
+    button.disabled = loading;
+    button.classList.toggle("is-generating", loading);
+    const label = button.querySelector(".summary-button-label");
+    if (label) label.textContent = loading ? i18n("article.generating") : i18n("article.generate");
+    if (loading) {
+      button.setAttribute("aria-busy", "true");
+    } else {
+      button.removeAttribute("aria-busy");
+    }
+  });
+}
+
 async function generateSummary(articleId, button) {
-  if (button) {
-    button.disabled = true;
-    button.classList.add("is-generating");
-    button.setAttribute("aria-busy", "true");
-  }
-  setStatus(i18n("status.generatingSummary"));
-  try {
+  if (summaryRequests.has(articleId)) return summaryRequests.get(articleId);
+  setSummaryLoading(articleId, true);
+  const request = (async () => {
     const result = await fetchJson(withLanguage(`/api/articles/${encodeURIComponent(articleId)}/summary`), { method: "POST" });
-    setStatus(result.cached ? i18n("status.summaryCached") : i18n("status.summaryGenerated"));
     if (result.summary) {
       applyGeneratedSummary(articleId, result.summary, button);
     }
+  })();
+  summaryRequests.set(articleId, request);
+  try {
+    await request;
   } catch (error) {
     setStatus(error.message, true);
   } finally {
-    if (button && button.isConnected) {
-      button.disabled = false;
-      button.classList.remove("is-generating");
-      button.removeAttribute("aria-busy");
-    }
+    summaryRequests.delete(articleId);
+    setSummaryLoading(articleId, false);
   }
 }
 
@@ -1240,17 +1283,27 @@ function submitSearch() {
   loadAll();
 }
 
+function hideSuggestions() {
+  suggestionAbortController?.abort();
+  suggestionRequestId += 1;
+  suggestions.hidden = true;
+  suggestions.innerHTML = "";
+}
+
 async function loadSuggestions() {
   const q = search.value.trim();
   if (q.length < 2) {
-    suggestions.hidden = true;
-    suggestions.innerHTML = "";
+    hideSuggestions();
     return;
   }
+  const requestId = ++suggestionRequestId;
+  suggestionAbortController?.abort();
+  suggestionAbortController = new AbortController();
   try {
     const params = formParams();
     params.set("q", q);
-    const data = await fetchJson(`/api/search/suggestions?${params}`);
+    const data = await fetchJson(`/api/search/suggestions?${params}`, { signal: suggestionAbortController.signal });
+    if (requestId !== suggestionRequestId) return;
     if (!data.suggestions.length) {
       suggestions.hidden = true;
       return;
@@ -1272,8 +1325,14 @@ async function loadSuggestions() {
         loadAll();
       });
     });
-  } catch {
-    suggestions.hidden = true;
+  } catch (error) {
+    if (error.name !== "AbortError") {
+      suggestions.hidden = true;
+    }
+  } finally {
+    if (requestId === suggestionRequestId) {
+      suggestionAbortController = null;
+    }
   }
 }
 
@@ -1390,16 +1449,11 @@ search.addEventListener("input", () => {
   if (state.view !== "today") return;
   const draftQuery = search.value.trim();
   window.clearTimeout(search._timer);
-  if (!draftQuery && state.query) {
-    state.query = "";
-    suggestions.hidden = true;
-    suggestions.innerHTML = "";
-    loadAll();
+  if (!draftQuery) {
+    hideSuggestions();
     return;
   }
-  search._timer = window.setTimeout(() => {
-    loadSuggestions();
-  }, 250);
+  loadSuggestions();
 });
 search.addEventListener("keydown", (event) => {
   if (state.view !== "today") return;
@@ -1410,8 +1464,12 @@ search.addEventListener("keydown", (event) => {
 clearSearch.addEventListener("click", () => {
   search.value = "";
   state.query = "";
-  suggestions.hidden = true;
+  hideSuggestions();
   loadAll();
+});
+document.addEventListener("click", (event) => {
+  if (event.target instanceof Element && event.target.closest(".search")) return;
+  hideSuggestions();
 });
 mediaModalClose?.addEventListener("click", closeMediaModal);
 mediaModal?.addEventListener("click", (event) => {
