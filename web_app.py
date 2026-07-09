@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated
@@ -22,6 +23,8 @@ BASE_DIR = Path(__file__).resolve().parent
 REFRESH_JOB_ID = "feed_refresh"
 DAILY_BRIEF_JOB_ID = "daily_brief"
 SERVERLESS_RUNTIME = os.getenv("VERCEL") == "1"
+_APP_INITIALIZED = False
+_APP_INITIALIZE_LOCK = threading.Lock()
 SOURCE_LINKS = {
     "GitHub Trending": "https://github.com/trending",
     "Hacker News": "https://news.ycombinator.com/",
@@ -32,9 +35,20 @@ SOURCE_LINKS = {
 }
 
 
+def ensure_app_initialized() -> None:
+    global _APP_INITIALIZED
+    if _APP_INITIALIZED:
+        return
+    with _APP_INITIALIZE_LOCK:
+        if _APP_INITIALIZED:
+            return
+        web_services.initialize()
+        _APP_INITIALIZED = True
+
+
 @asynccontextmanager
 async def lifespan(app_instance: FastAPI):
-    web_services.initialize()
+    ensure_app_initialized()
     scheduler = None
     if not SERVERLESS_RUNTIME:
         scheduler = create_scheduler()
@@ -74,6 +88,12 @@ app = FastAPI(title="Newser Web", lifespan=lifespan)
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 app.mount("/assets", StaticFiles(directory=str(BASE_DIR / "assets")), name="assets")
+
+
+@app.middleware("http")
+async def initialize_before_request(request: Request, call_next):
+    ensure_app_initialized()
+    return await call_next(request)
 
 
 @app.get("/")
