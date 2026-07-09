@@ -253,3 +253,13 @@ def api_cron_refresh(request: Request):
     result = web_services.refresh_feed()
     status_code = 200 if result.get("ok") else 500
     return JSONResponse(result | {"schedule": schedule}, status_code=status_code)
+
+
+@app.get("/api/cron/daily-brief")
+def api_cron_daily_brief(request: Request):
+    user_agent = request.headers.get("user-agent", "")
+    schedule = request.headers.get("x-vercel-cron-schedule")
+    if SERVERLESS_RUNTIME and ("vercel-cron/1.0" not in user_agent or not schedule):
+        return JSONResponse({"ok": False, "reason": "Forbidden"}, status_code=403)
+    result = web_services.generate_daily_brief_job()
+    return JSONResponse({"ok": True, "schedule": schedule, **result})

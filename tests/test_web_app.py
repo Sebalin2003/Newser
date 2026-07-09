@@ -875,6 +875,46 @@ class WebApiRouteTests(unittest.TestCase):
         self.assertEqual(response.json()["schedule"], "0 * * * *")
         refresh_feed.assert_called_once()
 
+    def test_cron_daily_brief_requires_vercel_cron_headers_in_serverless(self) -> None:
+        from fastapi.testclient import TestClient
+        import web_app
+
+        with (
+            patch.object(web_app, "SERVERLESS_RUNTIME", True),
+            patch.object(web_app.web_services, "generate_daily_brief_job") as generate,
+        ):
+            response = TestClient(web_app.app).get("/api/cron/daily-brief")
+
+        self.assertEqual(response.status_code, 403)
+        generate.assert_not_called()
+
+    def test_cron_daily_brief_runs_for_vercel_cron_request(self) -> None:
+        from fastapi.testclient import TestClient
+        import web_app
+
+        with (
+            patch.object(web_app, "SERVERLESS_RUNTIME", True),
+            patch.object(
+                web_app.web_services,
+                "generate_daily_brief_job",
+                return_value={"spanish": {"ok": True}, "english": {"ok": True}},
+            ) as generate,
+        ):
+            response = TestClient(web_app.app).get(
+                "/api/cron/daily-brief",
+                headers={
+                    "user-agent": "vercel-cron/1.0",
+                    "x-vercel-cron-schedule": "0 11 * * *",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["ok"])
+        self.assertEqual(response.json()["schedule"], "0 11 * * *")
+        self.assertEqual(response.json()["spanish"], {"ok": True})
+        self.assertEqual(response.json()["english"], {"ok": True})
+        generate.assert_called_once()
+
     def test_dynamic_keywords_route_returns_items(self) -> None:
         from fastapi.testclient import TestClient
         import web_app
