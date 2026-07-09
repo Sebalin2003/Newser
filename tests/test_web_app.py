@@ -841,6 +841,40 @@ class WebApiRouteTests(unittest.TestCase):
         self.assertTrue(response.json()["serverless_runtime"])
         self.assertTrue(response.json()["checks"]["scheduler_running"])
 
+    def test_cron_refresh_requires_vercel_cron_headers_in_serverless(self) -> None:
+        from fastapi.testclient import TestClient
+        import web_app
+
+        with (
+            patch.object(web_app, "SERVERLESS_RUNTIME", True),
+            patch.object(web_app.web_services, "refresh_feed") as refresh_feed,
+        ):
+            response = TestClient(web_app.app).get("/api/cron/refresh")
+
+        self.assertEqual(response.status_code, 403)
+        refresh_feed.assert_not_called()
+
+    def test_cron_refresh_runs_for_vercel_cron_request(self) -> None:
+        from fastapi.testclient import TestClient
+        import web_app
+
+        with (
+            patch.object(web_app, "SERVERLESS_RUNTIME", True),
+            patch.object(web_app.web_services, "refresh_feed", return_value={"ok": True}) as refresh_feed,
+        ):
+            response = TestClient(web_app.app).get(
+                "/api/cron/refresh",
+                headers={
+                    "user-agent": "vercel-cron/1.0",
+                    "x-vercel-cron-schedule": "0 * * * *",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["ok"])
+        self.assertEqual(response.json()["schedule"], "0 * * * *")
+        refresh_feed.assert_called_once()
+
     def test_dynamic_keywords_route_returns_items(self) -> None:
         from fastapi.testclient import TestClient
         import web_app
