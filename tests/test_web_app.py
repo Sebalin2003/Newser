@@ -789,6 +789,7 @@ class WebApiRouteTests(unittest.TestCase):
 
         web_app.app.state.scheduler = FakeScheduler()
         with (
+            patch.object(web_app, "SERVERLESS_RUNTIME", False),
             patch.object(web_app.web_services, "check_database_connection"),
             patch.object(web_app.web_services, "get_refresh_status", return_value={"last_error": None}),
         ):
@@ -813,6 +814,7 @@ class WebApiRouteTests(unittest.TestCase):
 
         web_app.app.state.scheduler = FakeScheduler()
         with (
+            patch.object(web_app, "SERVERLESS_RUNTIME", False),
             patch.object(web_app.web_services, "check_database_connection"),
             patch.object(web_app.web_services, "get_refresh_status", return_value={"last_error": "refresh failed"}),
         ):
@@ -821,6 +823,23 @@ class WebApiRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 503)
         self.assertFalse(response.json()["ok"])
         self.assertIn("refresh failed", response.json()["errors"][0])
+
+    def test_health_route_allows_serverless_without_scheduler(self) -> None:
+        from fastapi.testclient import TestClient
+        import web_app
+
+        web_app.app.state.scheduler = None
+        with (
+            patch.object(web_app, "SERVERLESS_RUNTIME", True),
+            patch.object(web_app.web_services, "check_database_connection"),
+            patch.object(web_app.web_services, "get_refresh_status", return_value={"last_error": None}),
+        ):
+            response = TestClient(web_app.app).get("/api/health")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["ok"])
+        self.assertTrue(response.json()["serverless_runtime"])
+        self.assertTrue(response.json()["checks"]["scheduler_running"])
 
     def test_dynamic_keywords_route_returns_items(self) -> None:
         from fastapi.testclient import TestClient

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated
@@ -20,6 +21,7 @@ from src import web_services
 BASE_DIR = Path(__file__).resolve().parent
 REFRESH_JOB_ID = "feed_refresh"
 DAILY_BRIEF_JOB_ID = "daily_brief"
+SERVERLESS_RUNTIME = os.getenv("VERCEL") == "1"
 SOURCE_LINKS = {
     "GitHub Trending": "https://github.com/trending",
     "Hacker News": "https://news.ycombinator.com/",
@@ -33,15 +35,18 @@ SOURCE_LINKS = {
 @asynccontextmanager
 async def lifespan(app_instance: FastAPI):
     web_services.initialize()
-    scheduler = create_scheduler()
-    scheduler.start()
+    scheduler = None
+    if not SERVERLESS_RUNTIME:
+        scheduler = create_scheduler()
+        scheduler.start()
+        web_services.ensure_feed_refresh(background=True)
+        web_services.ensure_daily_brief_catchup(background=True)
     app_instance.state.scheduler = scheduler
-    web_services.ensure_feed_refresh(background=True)
-    web_services.ensure_daily_brief_catchup(background=True)
     try:
         yield
     finally:
-        scheduler.shutdown(wait=False)
+        if scheduler:
+            scheduler.shutdown(wait=False)
 
 
 def create_scheduler() -> BackgroundScheduler:
@@ -147,9 +152,9 @@ def api_health(request: Request):
 
     checks = {
         "database": True,
-        "scheduler_running": bool(scheduler and scheduler.running),
-        "feed_refresh_job": feed_job is not None,
-        "daily_brief_job": daily_job is not None,
+        "scheduler_running": SERVERLESS_RUNTIME or bool(scheduler and scheduler.running),
+        "feed_refresh_job": SERVERLESS_RUNTIME or feed_job is not None,
+        "daily_brief_job": SERVERLESS_RUNTIME or daily_job is not None,
     }
     errors: list[str] = []
 
@@ -166,6 +171,7 @@ def api_health(request: Request):
     ok = all(checks.values()) and not errors
     payload = {
         "ok": ok,
+        "serverless_runtime": SERVERLESS_RUNTIME,
         "checks": checks,
         "refresh_status": refresh_status,
         "errors": errors,
