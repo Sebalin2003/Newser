@@ -15,7 +15,7 @@ from zoneinfo import ZoneInfo
 
 import yaml
 from dotenv import load_dotenv
-from sqlalchemy import and_, func, or_
+from sqlalchemy import and_, func, or_, text
 from sqlalchemy.orm import load_only
 
 from src.database import MacroResumen, Noticia, get_session, init_db, limpiar_datos_antiguos
@@ -158,6 +158,11 @@ def area_options(lang: str | None = None) -> dict[str, str]:
 def initialize() -> None:
     init_db()
     limpiar_datos_antiguos(dias_retencion=30)
+
+
+def check_database_connection() -> None:
+    with get_session() as session:
+        session.execute(text("SELECT 1")).scalar()
 
 
 def latest_ingested_at() -> datetime | None:
@@ -1151,6 +1156,7 @@ def get_hot_topics(selected_date: date, lang: str | None = None) -> list[dict[st
         query = session.query(Noticia).filter(
             Noticia.fecha_ingesta >= cutoff,
             _date_condition(selected_date),
+            Noticia.fuente != "GitHub Trending",
         )
         rows = (
             query.options(load_only(

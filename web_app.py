@@ -138,6 +138,41 @@ def api_refresh_status(request: Request, lang: str = "es"):
     return web_services.get_refresh_status(next_check_at)
 
 
+@app.get("/api/health")
+def api_health(request: Request):
+    scheduler = getattr(request.app.state, "scheduler", None)
+    feed_job = scheduler.get_job(REFRESH_JOB_ID) if scheduler else None
+    daily_job = scheduler.get_job(DAILY_BRIEF_JOB_ID) if scheduler else None
+    next_check_at = feed_job.next_run_time if feed_job else None
+
+    checks = {
+        "database": True,
+        "scheduler_running": bool(scheduler and scheduler.running),
+        "feed_refresh_job": feed_job is not None,
+        "daily_brief_job": daily_job is not None,
+    }
+    errors: list[str] = []
+
+    try:
+        web_services.check_database_connection()
+    except Exception as exc:
+        checks["database"] = False
+        errors.append(f"database: {exc}")
+
+    refresh_status = web_services.get_refresh_status(next_check_at)
+    if refresh_status.get("last_error"):
+        errors.append(f"scheduler last_error: {refresh_status['last_error']}")
+
+    ok = all(checks.values()) and not errors
+    payload = {
+        "ok": ok,
+        "checks": checks,
+        "refresh_status": refresh_status,
+        "errors": errors,
+    }
+    return JSONResponse(payload, status_code=200 if ok else 503)
+
+
 @app.get("/api/dynamic-keywords")
 def api_dynamic_keywords():
     return web_services.get_dynamic_keywords()

@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 from contextlib import contextmanager
 from datetime import date, datetime as real_datetime, timedelta, timezone
+from pathlib import Path
 from unittest.mock import patch
 
 
@@ -54,6 +55,16 @@ class TestSchema(unittest.TestCase):
         self.assertIn("github_period_label", columns)
         self.assertIn("github_metrics_updated_at", columns)
         self.assertIn("github_fresh_date", columns)
+
+    def test_postgres_schema_path_runs_additive_column_migrations(self) -> None:
+        source = Path("src/database.py").read_text(encoding="utf-8")
+        migration_body = source.split("def migrar_schema()", maxsplit=1)[1].split("# ---------------------------------------------------------------------------", maxsplit=1)[0]
+
+        self.assertNotIn("return\n\n    inspector = inspect(engine)", migration_body)
+        self.assertIn('datetime_type = "DATETIME" if sqlite else "TIMESTAMP"', migration_body)
+        self.assertIn('"github_total_stars": "github_total_stars INTEGER"', migration_body)
+        self.assertIn('"github_metrics_updated_at": f"github_metrics_updated_at {datetime_type}"', migration_body)
+        self.assertIn('_add_missing_columns("noticias", existing_cols, nuevas_columnas)', migration_body)
 
 
 class TestArticleScoring(unittest.TestCase):

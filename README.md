@@ -33,7 +33,18 @@ Check the already-running app and scheduler state without triggering collection 
 powershell -ExecutionPolicy Bypass -File scripts/verify_runtime_health.ps1 -BaseUrl http://127.0.0.1:8001
 ```
 
-Use this after code changes or restarts to catch runtime-only failures that unit tests cannot see, such as a stale process, an old `latest_ingested_at`, a missing `next_check_at`, or a non-empty scheduler `last_error`.
+Use this after code changes, restarts, and deployments to catch runtime-only failures that unit tests cannot see, such as a stale process, an old `latest_ingested_at`, a missing `next_check_at`, or a non-empty scheduler `last_error`. The script also checks `GET /api/health`, a read-only readiness endpoint that verifies database connectivity and scheduler job registration.
+
+## Production readiness
+
+Before promoting a deployment, require both checks to pass:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/verify_safe.ps1
+powershell -ExecutionPolicy Bypass -File scripts/verify_runtime_health.ps1 -BaseUrl https://your-newser-host
+```
+
+`/api/health` returns HTTP `200` only when the app can reach the configured database, the scheduler is running, the feed refresh job exists, the daily brief job exists, and the scheduler has no recorded `last_error`. It returns HTTP `503` when any readiness check fails.
 
 ## Supabase migration
 

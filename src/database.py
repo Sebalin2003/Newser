@@ -303,6 +303,17 @@ def limpiar_datos_antiguos(dias_retencion: int = 30) -> dict[str, int]:
     return resultado
 
 
+def _add_missing_columns(table_name: str, existing_cols: set[str], columns: dict[str, str]) -> None:
+    with engine.begin() as conn:
+        for col_name, column_sql in columns.items():
+            if col_name not in existing_cols:
+                try:
+                    conn.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {column_sql}"))
+                    logger.info("Columna '%s' agregada a tabla '%s'.", col_name, table_name)
+                except Exception as exc:
+                    logger.warning("No se pudo agregar '%s' a '%s': %s", col_name, table_name, exc)
+
+
 def migrar_schema() -> None:
     """
     Migración conservadora del schema.
@@ -311,17 +322,11 @@ def migrar_schema() -> None:
     - En SQLite, agrega columnas nuevas sin destruir datos existentes.
     - Idempotente: detecta columnas existentes antes de ejecutar ALTER TABLE.
     """
-    if not is_sqlite_url():
-        Base.metadata.create_all(bind=engine)
-        with engine.begin() as conn:
-            conn.execute(text(
-                "CREATE INDEX IF NOT EXISTS ix_noticias_search_fts "
-                "ON noticias USING GIN (to_tsvector('simple', "
-                "coalesce(titulo, '') || ' ' || coalesce(descripcion_original, '')))"
-            ))
-        logger.info("Schema migrado correctamente.")
-        return
+    sqlite = is_sqlite_url()
+    datetime_type = "DATETIME" if sqlite else "TIMESTAMP"
+    float_type = "FLOAT" if sqlite else "DOUBLE PRECISION"
 
+    Base.metadata.create_all(bind=engine)
     inspector = inspect(engine)
     existing_tables = inspector.get_table_names()
 
@@ -330,77 +335,62 @@ def migrar_schema() -> None:
         existing_cols = {col["name"] for col in inspector.get_columns("noticias")}
 
         nuevas_columnas = {
-            "discussion_url": "ALTER TABLE noticias ADD COLUMN discussion_url TEXT",
-            "cluster_id":    "ALTER TABLE noticias ADD COLUMN cluster_id INTEGER",
-            "entidades_json": "ALTER TABLE noticias ADD COLUMN entidades_json TEXT",
-            "sentimiento":    "ALTER TABLE noticias ADD COLUMN sentimiento VARCHAR(32) DEFAULT 'neutral'",
-            "ranking":        "ALTER TABLE noticias ADD COLUMN ranking INTEGER",
-            "num_comentarios": "ALTER TABLE noticias ADD COLUMN num_comentarios INTEGER",
-            "score":          "ALTER TABLE noticias ADD COLUMN score INTEGER",
-            "selected_score": "ALTER TABLE noticias ADD COLUMN selected_score FLOAT",
-            "score_components_json": "ALTER TABLE noticias ADD COLUMN score_components_json TEXT",
-            "tags_json": "ALTER TABLE noticias ADD COLUMN tags_json TEXT",
-            "selection_reason": "ALTER TABLE noticias ADD COLUMN selection_reason TEXT",
-            "scored_at": "ALTER TABLE noticias ADD COLUMN scored_at DATETIME",
-            "score_version": "ALTER TABLE noticias ADD COLUMN score_version VARCHAR(64)",
-            "is_favorite": "ALTER TABLE noticias ADD COLUMN is_favorite INTEGER NOT NULL DEFAULT 0",
-            "favorited_at": "ALTER TABLE noticias ADD COLUMN favorited_at DATETIME",
-            "media_url": "ALTER TABLE noticias ADD COLUMN media_url TEXT",
-            "media_type": "ALTER TABLE noticias ADD COLUMN media_type VARCHAR(16)",
-            "media_source_url": "ALTER TABLE noticias ADD COLUMN media_source_url TEXT",
-            "resumen_ia_en": "ALTER TABLE noticias ADD COLUMN resumen_ia_en TEXT",
-            "github_total_stars": "ALTER TABLE noticias ADD COLUMN github_total_stars INTEGER",
-            "github_stars_period": "ALTER TABLE noticias ADD COLUMN github_stars_period INTEGER",
-            "github_period_label": "ALTER TABLE noticias ADD COLUMN github_period_label VARCHAR(32)",
-            "github_metrics_updated_at": "ALTER TABLE noticias ADD COLUMN github_metrics_updated_at DATETIME",
-            "github_fresh_date": "ALTER TABLE noticias ADD COLUMN github_fresh_date DATE",
+            "discussion_url": "discussion_url TEXT",
+            "cluster_id": "cluster_id INTEGER",
+            "entidades_json": "entidades_json TEXT",
+            "sentimiento": "sentimiento VARCHAR(32) DEFAULT 'neutral'",
+            "ranking": "ranking INTEGER",
+            "num_comentarios": "num_comentarios INTEGER",
+            "score": "score INTEGER",
+            "selected_score": f"selected_score {float_type}",
+            "score_components_json": "score_components_json TEXT",
+            "tags_json": "tags_json TEXT",
+            "selection_reason": "selection_reason TEXT",
+            "scored_at": f"scored_at {datetime_type}",
+            "score_version": "score_version VARCHAR(64)",
+            "is_favorite": "is_favorite INTEGER NOT NULL DEFAULT 0",
+            "favorited_at": f"favorited_at {datetime_type}",
+            "media_url": "media_url TEXT",
+            "media_type": "media_type VARCHAR(16)",
+            "media_source_url": "media_source_url TEXT",
+            "resumen_ia_en": "resumen_ia_en TEXT",
+            "github_total_stars": "github_total_stars INTEGER",
+            "github_stars_period": "github_stars_period INTEGER",
+            "github_period_label": "github_period_label VARCHAR(32)",
+            "github_metrics_updated_at": f"github_metrics_updated_at {datetime_type}",
+            "github_fresh_date": "github_fresh_date DATE",
         }
 
-        with engine.begin() as conn:
-            for col_name, ddl in nuevas_columnas.items():
-                if col_name not in existing_cols:
-                    try:
-                        conn.execute(text(ddl))
-                        logger.info("Columna '%s' agregada a tabla 'noticias'.", col_name)
-                    except Exception as exc:
-                        logger.warning("No se pudo agregar '%s' a 'noticias': %s", col_name, exc)
+        _add_missing_columns("noticias", existing_cols, nuevas_columnas)
 
     if "clusters" in existing_tables:
         existing_cols_cl = {col["name"] for col in inspector.get_columns("clusters")}
         
         nuevas_columnas_cl = {
-            "sentimiento": "ALTER TABLE clusters ADD COLUMN sentimiento VARCHAR(32) DEFAULT 'neutral'",
+            "sentimiento": "sentimiento VARCHAR(32) DEFAULT 'neutral'",
         }
-        with engine.begin() as conn:
-            for col_name, ddl in nuevas_columnas_cl.items():
-                if col_name not in existing_cols_cl:
-                    try:
-                        conn.execute(text(ddl))
-                        logger.info("Columna '%s' agregada a tabla 'clusters'.", col_name)
-                    except Exception as exc:
-                        logger.warning("No se pudo agregar '%s' a 'clusters': %s", col_name, exc)
+        _add_missing_columns("clusters", existing_cols_cl, nuevas_columnas_cl)
 
     if "macro_resumenes" in existing_tables:
         existing_cols_mr = {col["name"] for col in inspector.get_columns("macro_resumenes")}
 
         nuevas_columnas_mr = {
-            "brief_json": "ALTER TABLE macro_resumenes ADD COLUMN brief_json TEXT",
-            "texto_en": "ALTER TABLE macro_resumenes ADD COLUMN texto_en TEXT",
-            "brief_json_en": "ALTER TABLE macro_resumenes ADD COLUMN brief_json_en TEXT",
-            "modelo_en": "ALTER TABLE macro_resumenes ADD COLUMN modelo_en VARCHAR(64)",
-            "fecha_generacion_en": "ALTER TABLE macro_resumenes ADD COLUMN fecha_generacion_en DATETIME",
+            "brief_json": "brief_json TEXT",
+            "texto_en": "texto_en TEXT",
+            "brief_json_en": "brief_json_en TEXT",
+            "modelo_en": "modelo_en VARCHAR(64)",
+            "fecha_generacion_en": f"fecha_generacion_en {datetime_type}",
         }
-        with engine.begin() as conn:
-            for col_name, ddl in nuevas_columnas_mr.items():
-                if col_name not in existing_cols_mr:
-                    try:
-                        conn.execute(text(ddl))
-                        logger.info("Columna '%s' agregada a tabla 'macro_resumenes'.", col_name)
-                    except Exception as exc:
-                        logger.warning("No se pudo agregar '%s' a 'macro_resumenes': %s", col_name, exc)
+        _add_missing_columns("macro_resumenes", existing_cols_mr, nuevas_columnas_mr)
 
     # Crear todas las tablas nuevas (Cluster, MacroResumen) si no existen
-    Base.metadata.create_all(bind=engine)
+    if not sqlite:
+        with engine.begin() as conn:
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_noticias_search_fts "
+                "ON noticias USING GIN (to_tsvector('simple', "
+                "coalesce(titulo, '') || ' ' || coalesce(descripcion_original, '')))"
+            ))
     logger.info("Schema migrado correctamente — versión 2.0.")
 
 

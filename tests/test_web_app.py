@@ -278,6 +278,24 @@ class WebServiceTestCase(unittest.TestCase):
         self.assertEqual(result["hot_topics"][0]["topic"], "OpenAI")
         self.assertEqual(result["hot_topics"][0]["source_count"], 3)
 
+    def test_hot_topics_exclude_github_trending_repositories(self) -> None:
+        today = datetime.now(web_services.BRIEF_TIMEZONE).date()
+        self.add_article("anthropic-r", "China issues backdoor security alert over Anthropic Claude Code", "Reuters", "cybersecurity", 78)
+        self.add_article("anthropic-o", "Anthropic responds to Claude Code security concerns", "OpenAI Blog", "cybersecurity", 76)
+        self.add_article("anthropic-h", "Developers discuss Claude Code security alert", "Hacker News", "cybersecurity", 74)
+        self.add_article("repo-1", "hesreallyhim/awesome-claude-code", "GitHub Trending", "developer_tools", 95)
+        self.add_article("repo-2", "wonderwhy-er/DesktopCommanderMCP", "GitHub Trending", "developer_tools", 94)
+        self.add_article("repo-3", "steipete/CodexBar", "GitHub Trending", "developer_tools", 93)
+
+        topics = web_services.get_hot_topics(today)
+
+        self.assertEqual(len(topics), 1)
+        self.assertEqual(topics[0]["sources"], ["Hacker News", "OpenAI Blog", "Reuters"])
+        self.assertEqual(topics[0]["source_count"], 3)
+        supporting_ids = [item["id"] for item in topics[0]["supporting_items"]]
+        self.assertEqual(supporting_ids, ["anthropic-r", "anthropic-o", "anthropic-h"])
+        self.assertNotIn("GitHub Trending", topics[0]["sources"])
+
     def test_search_feed_skips_hot_topic_clustering(self) -> None:
         today = datetime.now(web_services.BRIEF_TIMEZONE).date().isoformat()
         self.add_article("agent-search", "Agent runtime search", "OpenAI Blog", "ai_agents", 80)
@@ -756,6 +774,53 @@ class WebApiRouteTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"updating": False})
+
+    def test_health_route_reports_ready_runtime(self) -> None:
+        from fastapi.testclient import TestClient
+        import web_app
+
+        class FakeScheduler:
+            running = True
+
+            def get_job(self, job_id: str):
+                if job_id in {web_app.REFRESH_JOB_ID, web_app.DAILY_BRIEF_JOB_ID}:
+                    return type("FakeJob", (), {"next_run_time": None})()
+                return None
+
+        web_app.app.state.scheduler = FakeScheduler()
+        with (
+            patch.object(web_app.web_services, "check_database_connection"),
+            patch.object(web_app.web_services, "get_refresh_status", return_value={"last_error": None}),
+        ):
+            response = TestClient(web_app.app).get("/api/health")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["ok"])
+        self.assertTrue(response.json()["checks"]["database"])
+        self.assertTrue(response.json()["checks"]["scheduler_running"])
+
+    def test_health_route_fails_when_scheduler_has_last_error(self) -> None:
+        from fastapi.testclient import TestClient
+        import web_app
+
+        class FakeScheduler:
+            running = True
+
+            def get_job(self, job_id: str):
+                if job_id in {web_app.REFRESH_JOB_ID, web_app.DAILY_BRIEF_JOB_ID}:
+                    return type("FakeJob", (), {"next_run_time": None})()
+                return None
+
+        web_app.app.state.scheduler = FakeScheduler()
+        with (
+            patch.object(web_app.web_services, "check_database_connection"),
+            patch.object(web_app.web_services, "get_refresh_status", return_value={"last_error": "refresh failed"}),
+        ):
+            response = TestClient(web_app.app).get("/api/health")
+
+        self.assertEqual(response.status_code, 503)
+        self.assertFalse(response.json()["ok"])
+        self.assertIn("refresh failed", response.json()["errors"][0])
 
     def test_dynamic_keywords_route_returns_items(self) -> None:
         from fastapi.testclient import TestClient

@@ -39,6 +39,17 @@ try {
     Add-Failure $failures "GET / failed: $($_.Exception.Message)"
 }
 
+try {
+    $health = Invoke-JsonGet "$base/api/health"
+    Write-Host "GET /api/health -> HTTP $($health.StatusCode)"
+    Write-Host "health_ok: $($health.Json.ok)"
+    if ($health.StatusCode -ne 200 -or $health.Json.ok -ne $true) {
+        Add-Failure $failures "GET /api/health did not report ok=true."
+    }
+} catch {
+    Add-Failure $failures "GET /api/health failed: $($_.Exception.Message)"
+}
+
 $status = $null
 try {
     $refresh = Invoke-JsonGet "$base/api/refresh-status"
