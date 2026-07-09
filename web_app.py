@@ -8,9 +8,6 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated
 
-from apscheduler.schedulers.background import BackgroundScheduler
-from apscheduler.triggers.cron import CronTrigger
-from apscheduler.triggers.interval import IntervalTrigger
 from fastapi import FastAPI, Query
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -63,7 +60,11 @@ async def lifespan(app_instance: FastAPI):
             scheduler.shutdown(wait=False)
 
 
-def create_scheduler() -> BackgroundScheduler:
+def create_scheduler():
+    from apscheduler.schedulers.background import BackgroundScheduler
+    from apscheduler.triggers.cron import CronTrigger
+    from apscheduler.triggers.interval import IntervalTrigger
+
     scheduler = BackgroundScheduler(timezone=web_services.BRIEF_TIMEZONE)
     scheduler.add_job(
         web_services.ensure_feed_refresh,
