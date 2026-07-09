@@ -251,8 +251,9 @@ def api_cron_refresh(request: Request):
     if SERVERLESS_RUNTIME and ("vercel-cron/1.0" not in user_agent or not schedule):
         return JSONResponse({"ok": False, "reason": "Forbidden"}, status_code=403)
     result = web_services.refresh_feed()
+    catchup_started = web_services.ensure_daily_brief_catchup(background=False)
     status_code = 200 if result.get("ok") else 500
-    return JSONResponse(result | {"schedule": schedule}, status_code=status_code)
+    return JSONResponse(result | {"schedule": schedule, "daily_brief_catchup_started": catchup_started}, status_code=status_code)
 
 
 @app.get("/api/cron/daily-brief")

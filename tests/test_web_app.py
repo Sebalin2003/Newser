@@ -861,6 +861,7 @@ class WebApiRouteTests(unittest.TestCase):
         with (
             patch.object(web_app, "SERVERLESS_RUNTIME", True),
             patch.object(web_app.web_services, "refresh_feed", return_value={"ok": True}) as refresh_feed,
+            patch.object(web_app.web_services, "ensure_daily_brief_catchup", return_value=True) as catchup,
         ):
             response = TestClient(web_app.app).get(
                 "/api/cron/refresh",
@@ -873,7 +874,9 @@ class WebApiRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.json()["ok"])
         self.assertEqual(response.json()["schedule"], "0 * * * *")
+        self.assertTrue(response.json()["daily_brief_catchup_started"])
         refresh_feed.assert_called_once()
+        catchup.assert_called_once_with(background=False)
 
     def test_cron_daily_brief_requires_vercel_cron_headers_in_serverless(self) -> None:
         from fastapi.testclient import TestClient
@@ -1196,6 +1199,10 @@ class WebUiStaticTests(unittest.TestCase):
         self.assertIn("margin-bottom: 22px", filters_styles)
         self.assertIn("input:disabled", styles)
         self.assertNotIn('"brief.subtitle"', script)
+        self.assertIn('"brief.schedule": "The daily brief is generated every day at 8:00."', script)
+        self.assertIn('"brief.schedule": "El brief diario se genera todos los días a las 8:00."', script)
+        self.assertIn("brief-schedule-note", script)
+        self.assertIn(".brief-schedule-note", styles)
         self.assertIn('"brief.generating": "Today\'s brief is being generated.', script)
         self.assertNotIn(".topbar-subtitle", styles)
         self.assertNotIn("topbarEyebrow", script)

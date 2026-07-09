@@ -1472,6 +1472,10 @@ button:disabled {
   margin-top: 6px;
 }
 
+.daily-brief-toggle .brief-schedule-note {
+  color: var(--accent-text);
+}
+
 .daily-brief-chevron {
   border-bottom: 2px solid var(--muted);
   border-right: 2px solid var(--muted);

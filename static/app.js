@@ -63,6 +63,7 @@ const I18N = {
     "date.today": "Hoy",
     "date.all": "Todas las fechas",
     "brief.executive": "Resumen ejecutivo",
+    "brief.schedule": "El brief diario se genera todos los días a las 8:00.",
     "brief.loading": "Cargando brief...",
     "brief.archive": "Archivo",
     "brief.previous": "Briefs diarios anteriores",
@@ -178,6 +179,7 @@ const I18N = {
     "date.today": "Today",
     "date.all": "All dates",
     "brief.executive": "Executive summary",
+    "brief.schedule": "The daily brief is generated every day at 8:00.",
     "brief.loading": "Loading brief...",
     "brief.archive": "Archive",
     "brief.previous": "Previous daily briefs",
@@ -891,6 +893,7 @@ function renderCurrentBriefShell(body, meta) {
       <span>
         <small>${i18n("date.today")}</small>
         <strong>${i18n("brief.executive")}</strong>
+        <small class="brief-schedule-note">${i18n("brief.schedule")}</small>
         ${meta ? `<small>${meta}</small>` : ""}
       </span>
       <span class="daily-brief-chevron" aria-hidden="true"></span>
