@@ -2656,14 +2656,14 @@ body.is-loading #hot-topics {
     height: 100dvh;
     left: 0;
     max-height: 100dvh;
-    max-width: 300px;
+    max-width: calc(100vw - 28px);
     overflow-y: auto;
     padding: calc(14px + env(safe-area-inset-top, 0px)) 12px calc(18px + env(safe-area-inset-bottom, 0px));
     right: auto;
     top: 0;
     transform: translateX(-105%);
     transition: transform 220ms ease;
-    width: min(82vw, 300px);
+    width: min(360px, calc(100vw - 28px));
     z-index: 32;
   }
 
@@ -2710,23 +2710,65 @@ body.is-loading #hot-topics {
   }
 
   .sidebar-section {
-    padding: 10px;
+    border-radius: 12px;
+    padding: 12px;
   }
 
   .filters {
-    gap: 10px;
+    gap: 12px;
+    min-width: 0;
+  }
+
+  .feed-controls {
+    gap: 12px;
+    overflow: visible;
+  }
+
+  .feed-controls .field,
+  .feed-controls .multi-select,
+  .feed-controls .segmented,
+  .feed-controls input[type="date"],
+  .feed-controls .multi-select-button {
+    max-width: 100%;
+    min-width: 0;
+    width: 100%;
   }
 
   .field,
   .multi-select {
-    margin-bottom: 10px;
+    margin-bottom: 0;
   }
 
-  input,
-  select,
-  .multi-select-button {
-    min-height: 38px;
-    padding: 9px 11px;
+  .feed-controls input[type="date"],
+  .feed-controls select,
+  .feed-controls .multi-select-button {
+    -webkit-appearance: none;
+    appearance: none;
+    font-size: 16px;
+    min-height: 44px;
+    padding: 10px 12px;
+  }
+
+  .date-all-option {
+    align-items: center;
+    min-height: 42px;
+    margin-top: 0;
+    padding: 6px 2px;
+  }
+
+  .segmented {
+    gap: 4px;
+    padding: 4px;
+  }
+
+  .segmented legend {
+    margin-bottom: 6px;
+  }
+
+  .segmented span {
+    font-size: 14px;
+    min-height: 40px;
+    padding: 10px 8px;
   }
 
   body.sidebar-collapsed .nav-button {

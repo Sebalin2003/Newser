@@ -833,8 +833,16 @@ function initMobileShell() {
 }
 
 function expandableLabel(expanded) {
-  if (state.language === "en") return expanded ? "Show less" : "Read full text";
-  return expanded ? "Mostrar menos" : "Leer completo";
+  if (state.language === "en") return expanded ? "Show less" : "Show more";
+  return expanded ? "Mostrar menos" : "Mostrar más";
+}
+
+function textPreview(content, maxLength = 220) {
+  const text = String(content || "").replace(/\s+/g, " ").trim();
+  if (text.length <= maxLength) return text;
+  const boundary = text.lastIndexOf(" ", maxLength);
+  const cut = boundary > maxLength * 0.65 ? boundary : maxLength;
+  return `${text.slice(0, cut).trim()}...`;
 }
 
 function expandableText(content, className, label = "", preview = "") {
@@ -1154,6 +1162,7 @@ function renderArticle(item) {
   const titleParts = splitStarTitle(item.label || item.titulo);
   const isRepository = item.fuente === "GitHub Trending";
   const summary = isRepository ? item.descripcion : (hasSummary(item) ? item.resumen_ia : item.descripcion);
+  const summaryPreview = textPreview(summary, isRepository ? 180 : 240);
   const time = formatDate(item.fuente === "GitHub Trending" ? item.fecha_ingesta : item.fecha_publicacion);
   const tags = (item.tags || []).slice(0, 4).map((tag) => `<span class="tag">${escapeHtml(tag)}</span>`).join("");
   const metric = item.fuente === "GitHub Trending"
@@ -1212,7 +1221,7 @@ function renderArticle(item) {
       <div class="article-main">
         <div class="article-content">
           <h4 class="article-heading">${escapeHtml(titleParts.title)}</h4>
-          ${summary ? expandableText(summary, "article-summary", titleParts.title) : ""}
+          ${summary ? expandableText(summary, "article-summary", titleParts.title, summaryPreview) : ""}
           ${tags ? `<div class="tag-row">${tags}</div>` : ""}
         </div>
         ${visualRail}
@@ -1284,7 +1293,7 @@ function applyGeneratedSummary(articleId, summary, button) {
   } else {
     const heading = article.querySelector(".article-heading");
     if (heading) {
-      heading.insertAdjacentHTML("afterend", expandableText(cleanSummary, "article-summary", heading.textContent || ""));
+      heading.insertAdjacentHTML("afterend", expandableText(cleanSummary, "article-summary", heading.textContent || "", textPreview(cleanSummary, 240)));
     }
   }
   button?.remove();
