@@ -398,10 +398,10 @@ def _dedupe_feed_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _search_condition(session: Any, query_text: str) -> Any:
+    pattern = f"%{query_text}%"
     if session.bind and session.bind.dialect.name == "postgresql":
         terms = re.findall(r"[A-Za-z0-9]+", query_text.lower())
         if not terms:
-            pattern = f"%{query_text}%"
             return or_(Noticia.titulo.ilike(pattern), Noticia.descripcion_original.ilike(pattern))
         document = (
             func.coalesce(Noticia.titulo, "")
@@ -412,10 +412,13 @@ def _search_condition(session: Any, query_text: str) -> Any:
             "simple",
             document,
         )
-        return vector.op("@@")(
-            func.to_tsquery("simple", " & ".join(f"{term}:*" for term in terms))
+        return or_(
+            Noticia.titulo.ilike(pattern),
+            Noticia.descripcion_original.ilike(pattern),
+            vector.op("@@")(
+                func.to_tsquery("simple", " & ".join(f"{term}:*" for term in terms))
+            ),
         )
-    pattern = f"%{query_text}%"
     return or_(
         Noticia.titulo.ilike(pattern),
         Noticia.descripcion_original.ilike(pattern),
@@ -745,6 +748,12 @@ def get_stats(lang: str | None = None) -> dict[str, Any]:
     }
 
 
+def _suggestion_query_text(title: str) -> str:
+    text = re.sub(r"^\[\w+\]\s*", "", str(title or "")).strip()
+    text = re.sub(r"\s*[⭐â­]\s*[\d,]+.*$", "", text).strip()
+    return text or str(title or "").strip()
+
+
 def get_suggestions(
     q: str,
     fecha: str | None = None,
@@ -805,6 +814,7 @@ def get_suggestions(
         {
             "id": item["id"],
             "title": item["title"],
+            "query": _suggestion_query_text(item["title"]),
             "source": item["source"],
             "score": item["score"],
         }

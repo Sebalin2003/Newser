@@ -523,9 +523,17 @@ function renderStarCount(stars) {
   `;
 }
 
+function cleanSuggestionQuery(value) {
+  return String(value ?? "")
+    .replace(/^\[\w+\]\s*/, "")
+    .replace(/\s*[⭐â­]\s*[\d,]+.*$/, "")
+    .trim();
+}
+
 function renderTitleLabel(value) {
   const parts = splitStarTitle(value);
-  return `${escapeHtml(parts.title)}${parts.stars ? ` ${renderStarCount(parts.stars)}` : ""}`;
+  const title = parts.title.replace(/^\[\w+\]\s*/, "").trim() || parts.title;
+  return `${escapeHtml(title)}${parts.stars ? ` ${renderStarCount(parts.stars)}` : ""}`;
 }
 
 function formatScore(value) {
@@ -1379,7 +1387,7 @@ async function loadSuggestions() {
     }
     suggestions.innerHTML = data.suggestions
       .map((item) => `
-        <button type="button" data-title="${escapeHtml(item.title)}">
+        <button type="button" data-title="${escapeHtml(item.title)}" data-query="${escapeHtml(item.query || cleanSuggestionQuery(item.title) || item.title)}">
           ${renderTitleLabel(item.title)}
           <small>${escapeHtml(item.source)} - ${i18n("filters.score").toLowerCase()} ${formatScore(item.score)}</small>
         </button>
@@ -1388,7 +1396,7 @@ async function loadSuggestions() {
     suggestions.hidden = false;
     suggestions.querySelectorAll("button").forEach((button) => {
       button.addEventListener("click", () => {
-        search.value = button.dataset.title || "";
+        search.value = button.dataset.query || button.dataset.title || "";
         state.query = search.value.trim();
         suggestions.hidden = true;
         loadAll();

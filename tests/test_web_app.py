@@ -10,6 +10,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from sqlalchemy import create_engine, inspect
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.orm import sessionmaker
 
 from src.database import Base, DynamicKeyword, MacroResumen, Noticia
@@ -491,6 +492,13 @@ class WebServiceTestCase(unittest.TestCase):
             published_at=datetime(day_31.year, day_31.month, day_31.day, 15, tzinfo=timezone.utc),
             ingested_at=datetime.now(timezone.utc) - timedelta(days=31),
         )
+        self.add_article(
+            "decorated-github-suggestion",
+            "[GitHub] MadsLorentzen/ai-job-search ⭐ 19,473",
+            "GitHub Trending",
+            "ai_agents",
+            95,
+        )
 
         self.assertEqual(web_services.get_suggestions("a"), [])
 
@@ -501,10 +509,29 @@ class WebServiceTestCase(unittest.TestCase):
             suggestions = web_services.get_suggestions("agent")
         get_feed.assert_not_called()
         all_date_suggestions = web_services.get_suggestions("older", fecha="all")
+        decorated = web_services.get_suggestions("madslorentzen")[0]
+        decorated_feed = web_services.get_feed(q=decorated["query"])
 
         self.assertEqual(len(suggestions), 5)
         self.assertEqual([item["score"] for item in suggestions], [90.0, 80.0, 70.0, 60.0, 50.0])
         self.assertEqual([item["id"] for item in all_date_suggestions], ["older-window-item"])
+        self.assertEqual(decorated["query"], "MadsLorentzen/ai-job-search")
+        self.assertEqual([item["id"] for item in decorated_feed["items"]], ["decorated-github-suggestion"])
+
+    def test_postgres_search_keeps_substring_fallback_for_repo_names(self) -> None:
+        class Bind:
+            dialect = postgresql.dialect()
+
+        class Session:
+            bind = Bind()
+
+        condition = web_services._search_condition(Session(), "MadsLorentzen/ai-job-search")
+        compiled = condition.compile(dialect=postgresql.dialect())
+        sql = str(compiled)
+
+        self.assertIn("ILIKE", sql)
+        self.assertIn("%MadsLorentzen/ai-job-search%", compiled.params.values())
+        self.assertIn("to_tsquery", sql)
 
     def test_feed_staleness_uses_one_hour_threshold(self) -> None:
         now = datetime.now(timezone.utc)
@@ -1057,6 +1084,10 @@ class WebUiStaticTests(unittest.TestCase):
         self.assertIn("let suggestionAbortController = null", script)
         self.assertIn("suggestionAbortController?.abort()", script)
         self.assertIn("requestId !== suggestionRequestId", script)
+        self.assertIn("function cleanSuggestionQuery", script)
+        self.assertIn('parts.title.replace(/^\\[\\w+\\]\\s*/, "").trim()', script)
+        self.assertIn('data-query="${escapeHtml(item.query || cleanSuggestionQuery(item.title) || item.title)}"', script)
+        self.assertIn("search.value = button.dataset.query || button.dataset.title || \"\"", script)
         self.assertIn('document.addEventListener("click"', script)
         self.assertIn('event.target instanceof Element && event.target.closest(".search")', script)
         self.assertIn("hideSuggestions();", script)
@@ -1153,8 +1184,8 @@ class WebUiStaticTests(unittest.TestCase):
         self.assertIn("Usá el botón de corazón", script)
         self.assertNotIn("Saved to favorites.", script)
         self.assertNotIn("Removed from favorites.", script)
-        self.assertIn("/static/app.js?v=card-text-v1", template)
-        self.assertIn("/static/app.css?v=card-text-v1", template)
+        self.assertIn("/static/app.js?v=search-suggest-v2", template)
+        self.assertIn("/static/app.css?v=search-suggest-v2", template)
         self.assertIn('placeholder="Buscar"', template)
         self.assertIn('"search.placeholder": "Buscar"', script)
         self.assertIn('"search.placeholder": "Search"', script)
@@ -1293,7 +1324,7 @@ class WebUiStaticTests(unittest.TestCase):
         self.assertNotIn("Cambiar tema", preferences_section)
         self.assertIn('data-view-target="sources"', template)
         self.assertIn('id="source-preferences"', template)
-        self.assertIn("/static/app.css?v=card-text-v1", template)
+        self.assertIn("/static/app.css?v=search-suggest-v2", template)
         source_preferences = template.split('id="source-preferences"', maxsplit=1)[1].split("</section>", maxsplit=1)[0]
         self.assertNotIn('data-i18n="sources.kicker"', source_preferences)
         self.assertNotIn('data-i18n="sources.title"', source_preferences)
