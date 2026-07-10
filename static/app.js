@@ -832,6 +832,47 @@ function initMobileShell() {
   });
 }
 
+function expandableLabel(expanded) {
+  if (state.language === "en") return expanded ? "Show less" : "Read full text";
+  return expanded ? "Mostrar menos" : "Leer completo";
+}
+
+function expandableText(content, className, label = "", preview = "") {
+  const text = String(content || "");
+  if (!text) return "";
+  const shortText = String(preview || text);
+  const labelAttr = label ? ` aria-label="${escapeHtml(label)}"` : "";
+  return `
+    <button type="button" class="${className} expandable-text" data-expandable-text aria-expanded="false"${labelAttr}>
+      <span data-full-text="${escapeHtml(text)}" data-short-text="${escapeHtml(shortText)}">${escapeHtml(shortText)}</span>
+      <small data-expandable-label>${expandableLabel(false)}</small>
+    </button>
+  `;
+}
+
+function toggleExpandableText(button) {
+  if (button.dataset.expandableAvailable === "false") return;
+  const expanded = button.getAttribute("aria-expanded") === "true";
+  const nextExpanded = !expanded;
+  button.setAttribute("aria-expanded", String(nextExpanded));
+  const text = button.querySelector("span");
+  if (text) {
+    text.textContent = nextExpanded ? text.dataset.fullText || text.textContent : text.dataset.shortText || text.textContent;
+  }
+  const label = button.querySelector("[data-expandable-label]");
+  if (label) label.textContent = expandableLabel(nextExpanded);
+}
+
+function syncExpandableTextLabels(root = document) {
+  root.querySelectorAll("[data-expandable-text]").forEach((button) => {
+    const text = button.querySelector("span");
+    if (!text) return;
+    const hasAlternateFullText = (text.dataset.fullText || "") !== (text.dataset.shortText || "");
+    const hasOverflow = text.scrollHeight > text.clientHeight + 1;
+    button.dataset.expandableAvailable = String(hasAlternateFullText || hasOverflow);
+  });
+}
+
 function initSidebar() {
   if (!sidebarToggle) return;
   const isMobile = window.matchMedia("(max-width: 900px)").matches;
@@ -871,13 +912,13 @@ function renderBrief(data) {
       .map((item, index) => `
         <article class="brief-item">
           <h4>${index + 1}. ${escapeHtml(item.title || i18n("article.untitled"))}</h4>
-          <p>${escapeHtml(item.summary || "")}</p>
+          ${expandableText(item.summary, "brief-text", item.title || i18n("article.untitled"))}
           ${item.why_it_matters ? `<p><strong>${i18n("brief.why")}</strong> ${escapeHtml(item.why_it_matters)}</p>` : ""}
         </article>
       `)
       .join("");
     if (json.trend_reading) {
-      body += `<article class="brief-item"><h4>${i18n("brief.trend")}</h4><p>${escapeHtml(json.trend_reading)}</p></article>`;
+      body += `<article class="brief-item"><h4>${i18n("brief.trend")}</h4>${expandableText(json.trend_reading, "brief-text", i18n("brief.trend"))}</article>`;
     }
   } else {
     body = `<p>${escapeHtml(data.texto || "")}</p>`;
@@ -885,6 +926,7 @@ function renderBrief(data) {
   const meta = `${escapeHtml(data.n_noticias)} ${i18n("brief.articles")} - ${escapeHtml(data.modelo)}`;
   brief.innerHTML = renderCurrentBriefShell(body, meta);
   bindCurrentBriefToggle();
+  syncExpandableTextLabels(brief);
 }
 
 function renderCurrentBriefShell(body, meta) {
@@ -917,13 +959,13 @@ function renderBriefBody(data) {
       .map((item, index) => `
         <article class="brief-item">
           <h4>${index + 1}. ${escapeHtml(item.title || i18n("article.untitled"))}</h4>
-          <p>${escapeHtml(item.summary || "")}</p>
+          ${expandableText(item.summary, "brief-text", item.title || i18n("article.untitled"))}
           ${item.why_it_matters ? `<p><strong>${i18n("brief.why")}</strong> ${escapeHtml(item.why_it_matters)}</p>` : ""}
         </article>
       `)
       .join("");
     if (json.trend_reading) {
-      body += `<article class="brief-item"><h4>${i18n("brief.trend")}</h4><p>${escapeHtml(json.trend_reading)}</p></article>`;
+      body += `<article class="brief-item"><h4>${i18n("brief.trend")}</h4>${expandableText(json.trend_reading, "brief-text", i18n("brief.trend"))}</article>`;
     }
     return body;
   }
@@ -961,6 +1003,7 @@ function renderDailyBriefs(items) {
   dailyBriefsList.querySelectorAll("[data-daily-brief-toggle]").forEach((button) => {
     button.addEventListener("click", () => toggleDailyBrief(button));
   });
+  syncExpandableTextLabels(dailyBriefsList);
 }
 
 function toggleDailyBrief(button) {
@@ -969,6 +1012,7 @@ function toggleDailyBrief(button) {
   const expanded = button.getAttribute("aria-expanded") === "true";
   button.setAttribute("aria-expanded", String(!expanded));
   detail.hidden = expanded;
+  if (expanded === false) syncExpandableTextLabels(detail);
 }
 
 function renderFavorites(data) {
@@ -984,6 +1028,7 @@ function renderFavorites(data) {
   }
   favoritesFeed.innerHTML = data.items.map(renderArticle).join("");
   bindArticleActions(favoritesFeed);
+  syncExpandableTextLabels(favoritesFeed);
 }
 
 function renderHotTopics(items) {
@@ -1068,6 +1113,7 @@ function renderFeed(data) {
   }
   feed.innerHTML = data.items.map(renderArticle).join("");
   bindArticleActions(feed);
+  syncExpandableTextLabels(feed);
 }
 
 function bindArticleActions(root) {
@@ -1146,18 +1192,19 @@ function renderArticle(item) {
   `;
   const starMetric = titleParts.stars ? `<div class="article-star-metric">${renderStarCount(titleParts.stars)}</div>` : "";
   const mediaPreview = renderMediaPreview(item);
-  const visualRail = starMetric || mediaPreview
-    ? `<aside class="article-visual" aria-label="${i18n("article.media")}">${starMetric}${mediaPreview}</aside>`
+  const visualRail = mediaPreview
+    ? `<aside class="article-visual" aria-label="${i18n("article.media")}">${mediaPreview}</aside>`
     : "";
 
   return `
-    <article class="article${visualRail ? " has-visual" : ""}${item.media_url ? " has-media" : ""}" id="article-${escapeHtml(item.id)}">
+    <article class="article${visualRail ? " has-visual" : ""}${mediaPreview ? " has-media" : ""}" id="article-${escapeHtml(item.id)}">
       <div class="article-top">
         <div class="article-meta-stack">
           <div class="article-meta">${escapeHtml(item.fuente)}${time ? ` - ${escapeHtml(time)}` : ""}</div>
           <div class="badge-row"><span class="badge">${escapeHtml(item.area_label)}</span>${sourcePreferenceBadge}</div>
         </div>
         <div class="article-controls">
+          ${starMetric}
           <div class="score">${Number(item.selected_score || 0).toFixed(0)}</div>
           ${favoriteButton}
         </div>
@@ -1165,9 +1212,8 @@ function renderArticle(item) {
       <div class="article-main">
         <div class="article-content">
           <h4 class="article-heading">${escapeHtml(titleParts.title)}</h4>
-          ${summary ? `<p class="article-summary">${escapeHtml(summary)}</p>` : ""}
+          ${summary ? expandableText(summary, "article-summary", titleParts.title) : ""}
           ${tags ? `<div class="tag-row">${tags}</div>` : ""}
-          ${item.selection_reason ? `<p class="article-reason">${escapeHtml(item.selection_reason)}</p>` : ""}
         </div>
         ${visualRail}
       </div>
@@ -1224,14 +1270,25 @@ function applyGeneratedSummary(articleId, summary, button) {
   const existingSummary = article.querySelector(".article-summary");
   const cleanSummary = String(summary || "");
   if (existingSummary) {
-    existingSummary.textContent = cleanSummary;
+    const summaryText = existingSummary.querySelector("span");
+    if (summaryText) {
+      summaryText.textContent = cleanSummary;
+      summaryText.dataset.fullText = cleanSummary;
+      summaryText.dataset.shortText = cleanSummary;
+    } else {
+      existingSummary.textContent = cleanSummary;
+    }
+    existingSummary.setAttribute("aria-expanded", "false");
+    const label = existingSummary.querySelector("[data-expandable-label]");
+    if (label) label.textContent = expandableLabel(false);
   } else {
     const heading = article.querySelector(".article-heading");
     if (heading) {
-      heading.insertAdjacentHTML("afterend", `<p class="article-summary">${escapeHtml(cleanSummary)}</p>`);
+      heading.insertAdjacentHTML("afterend", expandableText(cleanSummary, "article-summary", heading.textContent || ""));
     }
   }
   button?.remove();
+  syncExpandableTextLabels(article);
 }
 
 async function toggleFavorite(articleId, button) {
@@ -1471,6 +1528,11 @@ clearSearch.addEventListener("click", () => {
   loadAll();
 });
 document.addEventListener("click", (event) => {
+  const expandable = event.target instanceof Element ? event.target.closest("[data-expandable-text]") : null;
+  if (expandable instanceof HTMLButtonElement) {
+    toggleExpandableText(expandable);
+    return;
+  }
   if (event.target instanceof Element && event.target.closest(".search")) return;
   hideSuggestions();
 });

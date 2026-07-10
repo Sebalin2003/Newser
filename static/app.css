@@ -1199,7 +1199,6 @@ button:disabled {
 .article-meta,
 .article-foot,
 .article-summary,
-.article-reason,
 .daily-brief-meta {
   color: var(--muted);
 }
@@ -1501,6 +1500,12 @@ button:disabled {
 }
 
 .daily-brief-body p {
+  margin: 8px 0;
+}
+
+.brief-text {
+  color: var(--text);
+  line-height: 1.55;
   margin: 8px 0;
 }
 
@@ -2244,11 +2249,41 @@ body.view-more .feed {
   outline: none;
 }
 
-.article-reason {
+.expandable-text {
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  color: inherit;
+  cursor: pointer;
+  display: block;
+  min-height: 0;
+  padding: 0;
+  text-align: left;
+  width: 100%;
+}
+
+.expandable-text:hover,
+.expandable-text:focus-visible {
+  background: transparent;
+  box-shadow: none;
+  transform: none;
+}
+
+.expandable-text:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.expandable-text span {
+  display: block;
+}
+
+.expandable-text small {
+  color: var(--accent-text);
+  display: none;
   font-size: 12px;
-  line-height: 1.35;
-  margin-top: 6px;
-  overflow-wrap: anywhere;
+  font-weight: 700;
+  margin-top: 4px;
 }
 
 .article-foot {
@@ -2269,10 +2304,6 @@ body.view-more .feed {
     justify-items: end;
   }
 
-  .article.has-visual .article-star-metric {
-    justify-content: flex-end;
-    width: 100%;
-  }
 }
 
 .article-actions {
@@ -2861,10 +2892,6 @@ body.is-loading #hot-topics {
     gap: 10px;
   }
 
-  .article.has-visual .article-main {
-    grid-template-columns: minmax(0, 1fr) minmax(104px, 34vw);
-  }
-
   .article h4 {
     font-size: 16px;
     line-height: 1.22;
@@ -2872,32 +2899,34 @@ body.is-loading #hot-topics {
   }
 
   .article-summary {
-    display: -webkit-box;
+    display: block;
     font-size: 14px;
     line-height: 1.38;
     margin-top: 6px;
+  }
+
+  .article-summary[aria-expanded="false"] span,
+  .brief-text[aria-expanded="false"] span {
+    display: -webkit-box;
     -webkit-box-orient: vertical;
     -webkit-line-clamp: 3;
     overflow: hidden;
   }
 
-  .article-reason {
-    display: -webkit-box;
-    font-size: 11px;
-    -webkit-box-orient: vertical;
-    -webkit-line-clamp: 2;
-    overflow: hidden;
+  .expandable-text[data-expandable-available="true"] small {
+    display: block;
   }
 
   .article-visual {
+    align-items: start;
+    display: grid;
     gap: 8px;
-    justify-items: end;
+    justify-items: stretch;
     width: 100%;
   }
 
   .article-star-metric {
-    justify-content: flex-end;
-    width: 100%;
+    justify-content: flex-start;
   }
 
   .github-star-count {
@@ -2910,7 +2939,7 @@ body.is-loading #hot-topics {
   }
 
   .article-media {
-    max-width: 100%;
+    max-width: min(220px, 100%);
     width: 100%;
   }
 
@@ -3105,10 +3134,6 @@ body.is-loading #hot-topics {
 
   #feed-meta {
     font-size: 13px;
-  }
-
-  .article.has-visual .article-main {
-    grid-template-columns: minmax(0, 1fr) 112px;
   }
 
   .article-actions a,
