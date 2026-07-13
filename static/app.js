@@ -64,11 +64,14 @@ const I18N = {
     "theme.light": "Claro",
     "theme.dark": "Oscuro",
     "mobile.openFilters": "Abrir filtros y ajustes",
+    "mobile.closeFilters": "Cerrar filtros y ajustes",
     "mobile.navigation": "Navegación móvil",
     "mobile.updates": "Actualizaciones",
     "mobile.briefs": "Briefs",
     "mobile.saved": "Favoritos",
     "mobile.more": "Más",
+    "mobile.earlier": "Anteriores",
+    "mobile.previousDays": "Días anteriores",
     "search.placeholder": "Buscar",
     "search.clear": "Limpiar búsqueda",
     "search.results": "Resultados de búsqueda",
@@ -80,8 +83,10 @@ const I18N = {
     "date.today": "Hoy",
     "date.all": "Todas las fechas",
     "brief.executive": "Resumen ejecutivo",
+    "brief.daily": "Brief diario",
     "brief.schedule": "El brief diario se genera todos los días a las 8:00.",
     "brief.loading": "Cargando brief...",
+    "brief.history": "Historial",
     "brief.previous": "Briefs diarios anteriores",
     "brief.generating": "El brief de hoy se está generando. Actualizá esta sección en un momento.",
     "brief.missing": "Todavía no hay brief diario disponible para esta fecha.",
@@ -194,11 +199,14 @@ const I18N = {
     "theme.light": "Light",
     "theme.dark": "Dark",
     "mobile.openFilters": "Open filters and settings",
+    "mobile.closeFilters": "Close filters and settings",
     "mobile.navigation": "Mobile navigation",
     "mobile.updates": "Updates",
     "mobile.briefs": "Briefs",
     "mobile.saved": "Saved",
     "mobile.more": "More",
+    "mobile.earlier": "Earlier",
+    "mobile.previousDays": "Previous Days",
     "search.placeholder": "Search",
     "search.clear": "Clear search",
     "search.results": "Search results",
@@ -210,8 +218,10 @@ const I18N = {
     "date.today": "Today",
     "date.all": "All dates",
     "brief.executive": "Executive summary",
+    "brief.daily": "Daily brief",
     "brief.schedule": "The daily brief is generated every day at 8:00.",
     "brief.loading": "Loading brief...",
+    "brief.history": "History",
     "brief.previous": "Previous daily briefs",
     "brief.generating": "Today's brief is being generated. Refresh this section in a moment.",
     "brief.missing": "No daily brief is available for this date yet.",
@@ -295,7 +305,9 @@ const feedMeta = document.querySelector("#feed-meta");
 const topbarTitle = document.querySelector(".topbar h2");
 const topbarTitleMain = document.querySelector("#topbar-title-main");
 const topbarDate = document.querySelector("#topbar-date");
+const dateInput = filters.querySelector('input[name="fecha"]');
 const allDatesToggle = document.querySelector("[data-all-dates]");
+const mobileHistoryPanel = document.querySelector("[data-mobile-history-panel]");
 const stats = document.querySelector("#stats");
 const brief = document.querySelector("#brief");
 const hotTopics = document.querySelector("#hot-topics");
@@ -305,8 +317,9 @@ const suggestions = document.querySelector("#suggestions");
 const clearSearch = document.querySelector("#clear-search");
 const overviewSections = document.querySelectorAll(".overview-only");
 const dailyBriefs = document.querySelector("#daily-briefs");
+const briefMobileHistory = document.querySelector("#brief-mobile-history");
 const dailyBriefsList = document.querySelector("#daily-briefs-list");
-const dailyBriefArchiveTitle = document.querySelector(".archive-title");
+const dailyBriefArchiveCount = document.querySelector("#brief-archive-count");
 const favorites = document.querySelector("#favorites");
 const favoritesFeed = document.querySelector("#favorites-feed");
 const sourcePreferencesPanel = document.querySelector("#source-preferences");
@@ -435,6 +448,34 @@ function withLanguage(url) {
   return `${url}${separator}lang=${encodeURIComponent(state.language)}`;
 }
 
+function parseFilterDate(value) {
+  const parts = String(value || "").split("-").map((part) => Number.parseInt(part, 10));
+  if (parts.length !== 3 || parts.some(Number.isNaN)) return null;
+  return new Date(parts[0], parts[1] - 1, parts[2]);
+}
+
+function formatFilterDate(date) {
+  if (!(date instanceof Date) || Number.isNaN(date.getTime())) return "";
+  return [
+    date.getFullYear(),
+    String(date.getMonth() + 1).padStart(2, "0"),
+    String(date.getDate()).padStart(2, "0"),
+  ].join("-");
+}
+
+function shiftFilterDate(value, offsetDays) {
+  const date = parseFilterDate(value);
+  if (!date) return "";
+  date.setDate(date.getDate() + offsetDays);
+  return formatFilterDate(date);
+}
+
+function formatMobileHistoryDate(value) {
+  const date = parseFilterDate(value);
+  if (!date) return "";
+  return date.toLocaleDateString(locale(), { month: "numeric", day: "2-digit" });
+}
+
 function applyTranslations() {
   document.documentElement.lang = state.language;
   document.querySelectorAll("[data-i18n]").forEach((node) => {
@@ -460,6 +501,8 @@ function applyTranslations() {
   syncDateMode();
   updateMultiSelectLabels();
   updateTopbarTitle();
+  renderMobileHistoryPanel();
+  syncMobileMenuToggleState();
   renderAccount();
 }
 
@@ -1040,7 +1083,6 @@ function updateTopbarTitle() {
   }
 
   if (!topbarDate) return;
-  const dateInput = filters.querySelector('input[name="fecha"]');
   const allDates = Boolean(allDatesToggle?.checked);
   const selectedDate = dateInput?.value || "";
   const latestDate = dateInput?.max || "";
@@ -1050,10 +1092,114 @@ function updateTopbarTitle() {
 }
 
 function syncDateMode() {
-  const dateInput = filters.querySelector('input[name="fecha"]');
   const allDates = Boolean(allDatesToggle?.checked);
   if (dateInput) dateInput.disabled = allDates;
   updateTopbarTitle();
+  updateMobileHistoryState();
+}
+
+function mobileHistoryDates() {
+  const latestDate = dateInput?.max || dateInput?.value || "";
+  return [
+    { key: "today", value: latestDate, label: i18n("date.today") },
+    { key: "previous-1", value: shiftFilterDate(latestDate, -1), label: formatMobileHistoryDate(shiftFilterDate(latestDate, -1)) },
+    { key: "previous-2", value: shiftFilterDate(latestDate, -2), label: formatMobileHistoryDate(shiftFilterDate(latestDate, -2)) },
+  ].filter((item) => item.value && (!dateInput?.min || item.value >= dateInput.min));
+}
+
+function mobileHistoryEarlierDates() {
+  const latestDate = dateInput?.max || dateInput?.value || "";
+  const minDate = dateInput?.min || "";
+  const items = [];
+  let value = shiftFilterDate(latestDate, -3);
+  while (value && (!minDate || value >= minDate)) {
+    items.push({ value, label: formatMobileHistoryDate(value) });
+    value = shiftFilterDate(value, -1);
+  }
+  return items;
+}
+
+function mobileHistoryQuickValues() {
+  return new Set(mobileHistoryDates().map((item) => item.value));
+}
+
+function shouldExpandMobileHistory() {
+  if (allDatesToggle?.checked) return true;
+  const selectedDate = dateInput?.value || "";
+  return Boolean(selectedDate && !mobileHistoryQuickValues().has(selectedDate));
+}
+
+function setMobileHistoryExpanded(expanded) {
+  if (!mobileHistoryPanel) return;
+  mobileHistoryPanel.dataset.expanded = String(expanded);
+}
+
+function updateMobileHistoryState() {
+  if (!mobileHistoryPanel) return;
+  const selectedDate = dateInput?.value || "";
+  const allDates = Boolean(allDatesToggle?.checked);
+  mobileHistoryPanel.querySelectorAll("[data-mobile-history-date]").forEach((button) => {
+    button.setAttribute("aria-pressed", String(!allDates && button.dataset.mobileHistoryDate === selectedDate));
+  });
+  const earlierButton = mobileHistoryPanel.querySelector("[data-mobile-history-earlier]");
+  if (earlierButton) earlierButton.setAttribute("aria-pressed", String(shouldExpandMobileHistory()));
+  const allDatesButton = mobileHistoryPanel.querySelector("[data-mobile-history-all]");
+  if (allDatesButton) allDatesButton.setAttribute("aria-pressed", String(allDates));
+  setMobileHistoryExpanded(shouldExpandMobileHistory());
+}
+
+function selectMobileHistoryDate(value) {
+  if (!dateInput || !value) return;
+  dateInput.value = value;
+  if (allDatesToggle) allDatesToggle.checked = false;
+  setMobileHistoryExpanded(false);
+  syncDateMode();
+  loadAll();
+  loadSuggestions();
+}
+
+function selectMobileHistoryAllDates() {
+  if (allDatesToggle) allDatesToggle.checked = true;
+  setMobileHistoryExpanded(true);
+  syncDateMode();
+  loadAll();
+  loadSuggestions();
+}
+
+function renderMobileHistoryPanel() {
+  if (!mobileHistoryPanel) return;
+  const quickDates = mobileHistoryDates();
+  const earlierDates = mobileHistoryEarlierDates();
+  mobileHistoryPanel.innerHTML = `
+    <div class="mobile-history-quick" role="group" aria-label="${escapeHtml(i18n("brief.history"))}">
+      ${quickDates.map((item) => `
+        <button class="mobile-history-chip" type="button" data-mobile-history-date="${escapeHtml(item.value)}" aria-pressed="false">
+          ${escapeHtml(item.label)}
+        </button>
+      `).join("")}
+      <button class="mobile-history-chip mobile-history-earlier" type="button" data-mobile-history-earlier aria-pressed="false">
+        ${escapeHtml(i18n("mobile.earlier"))}
+      </button>
+    </div>
+    <div class="mobile-history-complete" data-mobile-history-complete>
+      <button class="mobile-history-chip" type="button" data-mobile-history-all aria-pressed="false">
+        ${escapeHtml(i18n("date.all"))}
+      </button>
+      ${earlierDates.map((item) => `
+        <button class="mobile-history-chip" type="button" data-mobile-history-date="${escapeHtml(item.value)}" aria-pressed="false">
+          ${escapeHtml(item.label)}
+        </button>
+      `).join("")}
+    </div>
+  `;
+  mobileHistoryPanel.querySelectorAll("[data-mobile-history-date]").forEach((button) => {
+    button.addEventListener("click", () => selectMobileHistoryDate(button.dataset.mobileHistoryDate));
+  });
+  mobileHistoryPanel.querySelector("[data-mobile-history-all]")?.addEventListener("click", selectMobileHistoryAllDates);
+  mobileHistoryPanel.querySelector("[data-mobile-history-earlier]")?.addEventListener("click", () => {
+    setMobileHistoryExpanded(true);
+  });
+  updateMobileHistoryState();
 }
 
 function hasSummary(item) {
@@ -1152,7 +1298,7 @@ async function loadDailyBriefs() {
     ]);
     if (requestId !== dailyBriefRequestId || requestLanguage !== state.language || state.view !== "briefs") return;
     renderBrief(briefData);
-    renderDailyBriefs(archiveData.items || []);
+    renderDailyBriefs(archiveData.items || [], briefData);
     setStatus("");
   } catch (error) {
     if (requestId !== dailyBriefRequestId || requestLanguage !== state.language || state.view !== "briefs") return;
@@ -1285,17 +1431,28 @@ function isPhoneViewport() {
   return window.matchMedia("(max-width: 900px)").matches;
 }
 
+function syncMobileMenuToggleState() {
+  const expanded = document.body.classList.contains("mobile-drawer-open");
+  if (mobileMenuToggle) {
+    mobileMenuToggle.setAttribute("aria-expanded", String(expanded));
+    mobileMenuToggle.setAttribute("aria-label", i18n(expanded ? "mobile.closeFilters" : "mobile.openFilters"));
+  }
+  if (sidebarToggle && isPhoneViewport()) {
+    sidebarToggle.setAttribute("aria-label", i18n(expanded ? "mobile.closeFilters" : "mobile.openFilters"));
+  }
+}
+
 function openMobileDrawer() {
   if (!isPhoneViewport()) return;
   document.body.classList.add("mobile-drawer-open");
   if (mobileDrawerBackdrop) mobileDrawerBackdrop.hidden = false;
-  mobileMenuToggle?.setAttribute("aria-expanded", "true");
+  syncMobileMenuToggleState();
 }
 
 function closeMobileDrawer() {
   document.body.classList.remove("mobile-drawer-open");
   if (mobileDrawerBackdrop) mobileDrawerBackdrop.hidden = true;
-  mobileMenuToggle?.setAttribute("aria-expanded", "false");
+  syncMobileMenuToggleState();
 }
 
 function initMobileShell() {
@@ -1336,6 +1493,11 @@ function expandableText(content, className, label = "", preview = "") {
       <small data-expandable-label>${expandableLabel(false)}</small>
     </button>
   `;
+}
+
+function briefText(content) {
+  const text = String(content || "").trim();
+  return text ? `<p class="brief-text">${escapeHtml(text)}</p>` : "";
 }
 
 function toggleExpandableText(button) {
@@ -1431,34 +1593,34 @@ function renderInitialFeedSkeleton() {
 }
 
 function renderDailyBriefSkeleton() {
-  if (dailyBriefArchiveTitle) dailyBriefArchiveTitle.hidden = true;
+  if (dailyBriefArchiveCount) dailyBriefArchiveCount.textContent = "";
+  if (briefMobileHistory) briefMobileHistory.innerHTML = "";
+  setBriefMobileHistoryExpanded(false);
   brief.innerHTML = `
-    <article class="daily-brief-card daily-brief-skeleton" aria-hidden="true">
-      <div class="daily-brief-toggle">
+    <article class="daily-brief-card brief-loading-card" aria-hidden="true">
+      <div class="brief-loading-head">
         <span class="skeleton-stack">
-          <span class="shimmer-line shimmer-date"></span>
-          <span class="shimmer-line shimmer-title"></span>
-          <span class="shimmer-line shimmer-copy"></span>
+          <span class="brief-loading-line brief-loading-date"></span>
+          <span class="brief-loading-line brief-loading-title"></span>
+          <span class="brief-loading-line brief-loading-note"></span>
         </span>
-        <span class="shimmer-dot"></span>
+        <span class="brief-loading-orb"></span>
       </div>
-      <div class="daily-brief-body skeleton-stack">
-        <span class="shimmer-line"></span>
-        <span class="shimmer-line shimmer-copy"></span>
-        <span class="shimmer-line shimmer-copy-short"></span>
+      <div class="brief-loading-body skeleton-stack">
+        <span class="brief-loading-line"></span>
+        <span class="brief-loading-line brief-loading-copy"></span>
+        <span class="brief-loading-line brief-loading-copy-short"></span>
       </div>
     </article>
   `;
-  dailyBriefsList.innerHTML = Array.from({ length: 3 }, () => `
-    <article class="daily-brief-card daily-brief-skeleton" aria-hidden="true">
-      <div class="daily-brief-toggle">
-        <span class="skeleton-stack">
-          <span class="shimmer-line shimmer-date"></span>
-          <span class="shimmer-line shimmer-copy"></span>
-        </span>
-        <span class="shimmer-dot"></span>
-      </div>
-    </article>
+  dailyBriefsList.innerHTML = Array.from({ length: 7 }, () => `
+    <div class="brief-archive-item brief-archive-skeleton" aria-hidden="true">
+      <span class="brief-loading-dot"></span>
+      <span class="skeleton-stack">
+        <span class="brief-loading-line brief-loading-row-title"></span>
+        <span class="brief-loading-line brief-loading-row-copy"></span>
+      </span>
+    </div>
   `).join("");
 }
 
@@ -1466,16 +1628,16 @@ function renderFavoritesSkeleton() {
   renderFeedSkeleton(favoritesFeed, 3);
 }
 
-function renderBrief(data) {
-  if (!data.available) {
+function renderBrief(data, context = {}) {
+  if (data.available === false) {
     const missingMessage = data.catchup_started || data.catchup_running
       ? i18n("brief.generating")
       : i18n("brief.missing");
     brief.innerHTML = renderCurrentBriefShell(
       `<div class="empty">${escapeHtml(missingMessage)}</div>`,
       "",
+      context,
     );
-    bindCurrentBriefToggle();
     return;
   }
   const json = data.brief_json;
@@ -1486,43 +1648,41 @@ function renderBrief(data) {
       .map((item, index) => `
         <article class="brief-item">
           <h4>${index + 1}. ${escapeHtml(item.title || i18n("article.untitled"))}</h4>
-          ${expandableText(item.summary, "brief-text", item.title || i18n("article.untitled"))}
+          ${briefText(item.summary)}
           ${item.why_it_matters ? `<p><strong>${i18n("brief.why")}</strong> ${escapeHtml(item.why_it_matters)}</p>` : ""}
         </article>
       `)
       .join("");
     if (json.trend_reading) {
-      body += `<article class="brief-item"><h4>${i18n("brief.trend")}</h4>${expandableText(json.trend_reading, "brief-text", i18n("brief.trend"))}</article>`;
+      body += `<article class="brief-item"><h4>${i18n("brief.trend")}</h4>${briefText(json.trend_reading)}</article>`;
     }
   } else {
     body = `<p>${escapeHtml(data.texto || "")}</p>`;
   }
-  const meta = `${escapeHtml(data.n_noticias)} ${i18n("brief.articles")} - ${escapeHtml(data.modelo)}`;
-  brief.innerHTML = renderCurrentBriefShell(body, meta);
-  bindCurrentBriefToggle();
-  syncExpandableTextLabels(brief);
+  const meta = `${escapeHtml(data.n_noticias)} ${i18n("brief.articles")}`;
+  brief.innerHTML = renderCurrentBriefShell(body, meta, context);
 }
 
-function renderCurrentBriefShell(body, meta) {
-  return `
-    <button class="daily-brief-toggle current-brief-toggle" type="button" data-current-brief-toggle aria-expanded="true" aria-controls="today-brief-body">
-      <span>
-        <small>${i18n("date.today")}</small>
-        <strong>${i18n("brief.executive")}</strong>
-        <small class="brief-schedule-note">${i18n("brief.schedule")}</small>
-        ${meta ? `<small>${meta}</small>` : ""}
-      </span>
-      <span class="daily-brief-chevron" aria-hidden="true"></span>
-    </button>
-    <div id="today-brief-body" class="daily-brief-body current-brief-body">${body}</div>
+function renderCurrentBriefShell(body, meta, context = {}) {
+  const label = context.label || i18n("date.today");
+  const title = context.title || i18n("brief.executive");
+  const note = context.note === undefined ? i18n("brief.schedule") : context.note;
+  const header = `
+    <span>
+      <small>${escapeHtml(label)}</small>
+      <strong>${escapeHtml(title)}</strong>
+      ${note ? `<small class="brief-schedule-note">${escapeHtml(note)}</small>` : ""}
+      ${meta ? `<small>${meta}</small>` : ""}
+    </span>
   `;
-}
-
-function bindCurrentBriefToggle() {
-  const button = brief.querySelector("[data-current-brief-toggle]");
-  if (button) {
-    button.addEventListener("click", () => toggleDailyBrief(button));
-  }
+  return `
+    <article class="daily-brief-card current-brief-card">
+      <div class="daily-brief-toggle current-brief-toggle" data-current-brief-static>
+        ${header}
+      </div>
+      <div id="today-brief-body" class="daily-brief-body current-brief-body">${body}</div>
+    </article>
+  `;
 }
 
 function renderBriefBody(data) {
@@ -1533,61 +1693,229 @@ function renderBriefBody(data) {
       .map((item, index) => `
         <article class="brief-item">
           <h4>${index + 1}. ${escapeHtml(item.title || i18n("article.untitled"))}</h4>
-          ${expandableText(item.summary, "brief-text", item.title || i18n("article.untitled"))}
+          ${briefText(item.summary)}
           ${item.why_it_matters ? `<p><strong>${i18n("brief.why")}</strong> ${escapeHtml(item.why_it_matters)}</p>` : ""}
         </article>
       `)
       .join("");
     if (json.trend_reading) {
-      body += `<article class="brief-item"><h4>${i18n("brief.trend")}</h4>${expandableText(json.trend_reading, "brief-text", i18n("brief.trend"))}</article>`;
+      body += `<article class="brief-item"><h4>${i18n("brief.trend")}</h4>${briefText(json.trend_reading)}</article>`;
     }
     return body;
   }
   return `<p>${escapeHtml(data.texto || "")}</p>`;
 }
 
-function renderDailyBriefs(items) {
-  if (dailyBriefArchiveTitle) dailyBriefArchiveTitle.hidden = false;
+function briefArchiveTitle(item) {
+  const json = item.brief_json;
+  if (json && Array.isArray(json.items) && json.items.length) {
+    return json.items[0].title || json.intro || item.fecha || i18n("brief.daily");
+  }
+  const text = String(item.texto || "").replace(/\s+/g, " ").trim();
+  return text ? text.slice(0, 92) : item.fecha || i18n("brief.daily");
+}
+
+function formatArchiveDate(value) {
+  if (!value) return "";
+  const parts = String(value).split("-").map((part) => Number.parseInt(part, 10));
+  if (parts.length !== 3 || parts.some(Number.isNaN)) return value;
+  const date = new Date(parts[0], parts[1] - 1, parts[2]);
+  return date.toLocaleDateString(locale(), { month: "short", day: "numeric" });
+}
+
+function archiveMonthKey(value) {
+  const parts = String(value || "").split("-").map((part) => Number.parseInt(part, 10));
+  if (parts.length !== 3 || parts.some(Number.isNaN)) return "";
+  return `${parts[0]}-${String(parts[1]).padStart(2, "0")}`;
+}
+
+function formatArchiveMonth(value) {
+  const parts = String(value || "").split("-").map((part) => Number.parseInt(part, 10));
+  if (parts.length !== 3 || parts.some(Number.isNaN)) return value || "";
+  const date = new Date(parts[0], parts[1] - 1, 1);
+  return date.toLocaleDateString(locale(), { month: "long", year: "numeric" });
+}
+
+function currentArchiveMonthKey() {
+  const today = new Date();
+  return `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function setBriefMobileHistoryExpanded(expanded) {
+  dailyBriefs?.setAttribute("data-mobile-history-expanded", String(expanded));
+  if (dailyBriefsList) dailyBriefsList.dataset.mobileExpanded = String(expanded);
+  if (dailyBriefArchiveCount?.dataset.fullCount) {
+    dailyBriefArchiveCount.textContent = expanded
+      ? dailyBriefArchiveCount.dataset.previousDaysCount || "0"
+      : dailyBriefArchiveCount.dataset.fullCount;
+  }
+  dailyBriefsList?.querySelectorAll("[data-brief-archive-month-count]").forEach((count) => {
+    count.textContent = expanded
+      ? count.dataset.previousDaysCount || "0"
+      : count.dataset.fullCount || "0";
+  });
+}
+
+function renderBriefMobileHistory(items, todayData = null) {
+  if (!briefMobileHistory) return;
+  const quickArchiveItems = items.slice(0, 2);
+  briefMobileHistory.innerHTML = `
+    ${todayData ? `
+      <button class="mobile-history-chip" type="button" data-brief-mobile-today aria-pressed="true">
+        ${escapeHtml(i18n("date.today"))}
+      </button>
+    ` : ""}
+    ${quickArchiveItems.map((item, index) => `
+      <button class="mobile-history-chip" type="button" data-brief-mobile-index="${index}" aria-pressed="false">
+        ${escapeHtml(formatMobileHistoryDate(item.fecha))}
+      </button>
+    `).join("")}
+    <button class="mobile-history-chip brief-archive-earlier" type="button" data-brief-mobile-previous-days aria-pressed="false">
+      ${escapeHtml(i18n("mobile.previousDays"))}
+    </button>
+  `;
+  setBriefMobileHistoryExpanded(false);
+  briefMobileHistory.querySelector("[data-brief-mobile-today]")?.addEventListener("click", (event) => {
+    briefMobileHistory.querySelectorAll(".mobile-history-chip").forEach((button) => {
+      button.setAttribute("aria-pressed", String(button === event.currentTarget));
+    });
+    setBriefMobileHistoryExpanded(false);
+    if (todayData) renderBrief(todayData);
+  });
+  briefMobileHistory.querySelectorAll("[data-brief-mobile-index]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const index = Number.parseInt(button.dataset.briefMobileIndex || "-1", 10);
+      const item = items[index];
+      if (!item) return;
+      briefMobileHistory.querySelectorAll(".mobile-history-chip").forEach((other) => {
+        other.setAttribute("aria-pressed", String(other === button));
+      });
+      setBriefMobileHistoryExpanded(false);
+      renderBrief(
+        { ...item, available: true },
+        { label: formatArchiveDate(item.fecha), title: i18n("brief.daily"), note: "" },
+      );
+    });
+  });
+  briefMobileHistory.querySelector("[data-brief-mobile-previous-days]")?.addEventListener("click", (event) => {
+    setBriefMobileHistoryExpanded(true);
+    briefMobileHistory.querySelectorAll(".mobile-history-chip").forEach((button) => {
+      button.setAttribute("aria-pressed", String(button === event.currentTarget));
+    });
+  });
+}
+
+function renderDailyBriefs(items, todayData = null) {
+  if (dailyBriefArchiveCount) {
+    dailyBriefArchiveCount.dataset.fullCount = String(items.length);
+    dailyBriefArchiveCount.dataset.previousDaysCount = String(Math.max(items.length - 2, 0));
+    dailyBriefArchiveCount.textContent = dailyBriefArchiveCount.dataset.fullCount;
+  }
+  renderBriefMobileHistory(items, todayData);
+  const todayRow = todayData ? `
+    <article class="brief-archive-item brief-archive-today">
+      <button class="brief-archive-button" type="button" data-daily-brief-today aria-pressed="true">
+        <span class="brief-archive-date">${escapeHtml(i18n("date.today"))}</span>
+        <span class="brief-archive-copy">
+          <strong>${escapeHtml(briefArchiveTitle(todayData))}</strong>
+          <small>${todayData.available ? `${escapeHtml(todayData.n_noticias)} ${i18n("brief.articles")}` : escapeHtml(i18n("brief.missing"))}</small>
+        </span>
+      </button>
+    </article>
+  ` : "";
   if (!items.length) {
     dailyBriefsList.innerHTML = `
-      <div class="empty panel archive-empty">
+      ${todayRow}
+      <div class="empty archive-empty">
         <strong>${i18n("brief.noPreviousTitle")}</strong>
         <span>${i18n("brief.noPreviousBody")}</span>
       </div>
     `;
     return;
   }
-  dailyBriefsList.innerHTML = items
-    .map((item, index) => {
-      const detailId = `daily-brief-${index}`;
-      const expanded = index === 0;
+  const groups = [];
+  items.forEach((item, index) => {
+    const monthKey = archiveMonthKey(item.fecha);
+    const lastGroup = groups[groups.length - 1];
+    if (!lastGroup || lastGroup.monthKey !== monthKey) {
+      groups.push({ monthKey, label: formatArchiveMonth(item.fecha), items: [] });
+    }
+    groups[groups.length - 1].items.push({ item, index });
+  });
+  const currentMonthKey = currentArchiveMonthKey();
+  const fullArchive = groups
+    .map((group, groupIndex) => {
+      const expanded = group.monthKey === currentMonthKey;
+      const panelId = `brief-archive-month-${groupIndex}`;
+      const mobilePreviousCount = group.items.filter(({ index }) => index >= 2).length;
+      const monthItems = group.items.map(({ item, index }) => {
       return `
-      <article class="daily-brief-card">
-        <button class="daily-brief-toggle" type="button" data-daily-brief-toggle aria-expanded="${expanded}" aria-controls="${detailId}">
-          <span>
-            <strong>${escapeHtml(item.fecha)}</strong>
-            <small>${escapeHtml(item.n_noticias)} ${i18n("brief.articles")} - ${escapeHtml(item.modelo)}</small>
+      <article class="brief-archive-item${index < 2 ? " brief-archive-mobile-quick" : ""}">
+        <button class="brief-archive-button" type="button" data-daily-brief-toggle data-brief-index="${index}" aria-pressed="false">
+          <span class="brief-archive-date">${escapeHtml(formatArchiveDate(item.fecha))}</span>
+          <span class="brief-archive-copy">
+            <strong>${escapeHtml(briefArchiveTitle(item))}</strong>
+            <small>${escapeHtml(item.n_noticias)} ${i18n("brief.articles")}</small>
           </span>
-          <span class="daily-brief-chevron" aria-hidden="true"></span>
         </button>
-        <div id="${detailId}" class="daily-brief-body" ${expanded ? "" : "hidden"}>${renderBriefBody(item)}</div>
       </article>
+    `;
+      }).join("");
+      return `
+      <section class="brief-archive-month" data-brief-archive-month data-mobile-previous-count="${mobilePreviousCount}">
+        <button class="brief-archive-month-button" type="button" aria-expanded="${expanded}" aria-controls="${panelId}">
+          <span class="brief-archive-month-arrow" aria-hidden="true"></span>
+          <span>${escapeHtml(group.label)}</span>
+          <span class="brief-archive-month-count" data-brief-archive-month-count data-full-count="${group.items.length}" data-previous-days-count="${mobilePreviousCount}">${group.items.length}</span>
+        </button>
+        <div id="${panelId}" class="brief-archive-month-items" ${expanded ? "" : "hidden"}>
+          ${monthItems}
+        </div>
+      </section>
     `;
     })
     .join("");
+  dailyBriefsList.dataset.mobileExpanded = "false";
+  dailyBriefsList.innerHTML = `
+    ${todayRow}
+    <div class="brief-archive-full" data-brief-archive-full>
+      ${fullArchive}
+    </div>
+  `;
+  const todayButton = dailyBriefsList.querySelector("[data-daily-brief-today]");
+  if (todayButton && todayData) {
+    dailyBriefsList.querySelectorAll("[data-daily-brief-today]").forEach((button) => button.addEventListener("click", () => {
+      dailyBriefsList.querySelectorAll("[data-daily-brief-toggle], [data-daily-brief-today]").forEach((other) => {
+        other.setAttribute("aria-pressed", String(other === button));
+      });
+      setBriefMobileHistoryExpanded(false);
+      renderBrief(todayData);
+    }));
+  }
   dailyBriefsList.querySelectorAll("[data-daily-brief-toggle]").forEach((button) => {
-    button.addEventListener("click", () => toggleDailyBrief(button));
+    button.addEventListener("click", () => {
+      const index = Number.parseInt(button.dataset.briefIndex || "-1", 10);
+      const item = items[index];
+      if (!item) return;
+      dailyBriefsList.querySelectorAll("[data-daily-brief-toggle], [data-daily-brief-today]").forEach((other) => {
+        other.setAttribute("aria-pressed", String(other === button));
+      });
+      setBriefMobileHistoryExpanded(false);
+      renderBrief(
+        { ...item, available: true },
+        { label: formatArchiveDate(item.fecha), title: i18n("brief.daily"), note: "" },
+      );
+    });
   });
-  syncExpandableTextLabels(dailyBriefsList);
-}
-
-function toggleDailyBrief(button) {
-  const detail = document.getElementById(button.getAttribute("aria-controls"));
-  if (!detail) return;
-  const expanded = button.getAttribute("aria-expanded") === "true";
-  button.setAttribute("aria-expanded", String(!expanded));
-  detail.hidden = expanded;
-  if (expanded === false) syncExpandableTextLabels(detail);
+  dailyBriefsList.querySelectorAll(".brief-archive-month-button").forEach((button) => {
+    button.addEventListener("click", () => {
+      const panel = document.getElementById(button.getAttribute("aria-controls"));
+      if (!panel) return;
+      const expanded = button.getAttribute("aria-expanded") === "true";
+      button.setAttribute("aria-expanded", String(!expanded));
+      panel.hidden = expanded;
+    });
+  });
 }
 
 function renderFavorites(data) {

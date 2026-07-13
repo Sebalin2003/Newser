@@ -10,7 +10,7 @@
     document.documentElement.dataset.theme = "dark";
     document.documentElement.lang = "es";
   </script>
-  <link rel="stylesheet" href="/static/app.css?v=mobile-preferences-v3">
+  <link rel="stylesheet" href="/static/app.css?v=brief-shimmer-v3">
 </head>
 <body>
   <aside class="sidebar">
@@ -69,7 +69,8 @@
 
     <form id="filters" class="filters">
       <div class="sidebar-section feed-controls">
-        <label class="field">
+        <div class="mobile-history-panel" data-mobile-history-panel aria-label="Historial" data-i18n-aria-label="brief.history"></div>
+        <label class="field date-field" data-date-field>
           <input type="date" name="fecha" min="{{ min_date }}" max="{{ max_date }}" value="{{ max_date }}" aria-label="Fecha" data-i18n-aria-label="filters.date">
         </label>
         <label class="check date-all-option">
@@ -240,18 +241,22 @@
       <div id="favorites-feed" class="favorites-feed-list"></div>
     </section>
 
-    <section id="daily-briefs" class="daily-briefs archive-workspace" hidden>
-      <section class="panel" id="brief">
+    <section id="daily-briefs" class="daily-briefs brief-workspace" hidden>
+      <div id="brief-mobile-history" class="brief-mobile-history" aria-label="Historial" data-i18n-aria-label="brief.history"></div>
+      <section class="panel brief-reader" id="brief">
         <div class="section-title">
           <p class="eyebrow" data-i18n="date.today">Hoy</p>
           <h3 data-i18n="brief.executive">Resumen ejecutivo</h3>
         </div>
         <div class="empty" data-i18n="brief.loading">Cargando brief...</div>
       </section>
-      <div class="section-title archive-title">
-        <h3 data-i18n="brief.previous">Briefs diarios anteriores</h3>
-      </div>
-      <div id="daily-briefs-list" class="daily-brief-list"></div>
+      <aside class="brief-archive-panel" aria-labelledby="brief-archive-title">
+        <div class="brief-archive-head">
+          <h3 id="brief-archive-title" data-i18n="brief.history">Historial</h3>
+          <span id="brief-archive-count" class="brief-archive-count"></span>
+        </div>
+        <div id="daily-briefs-list" class="daily-brief-list"></div>
+      </aside>
     </section>
 
     <section id="mobile-more" class="mobile-more-view" hidden>
@@ -427,6 +432,6 @@
 
   <script>window.NEWSER_AUTH_CONFIG = {{ auth_config | tojson }};</script>
   <script src="/static/supabase-2.49.4.min.js"></script>
-  <script src="/static/app.js?v=mobile-preferences-v3"></script>
+  <script src="/static/app.js?v=brief-shimmer-v3"></script>
 </body>
 </html>
