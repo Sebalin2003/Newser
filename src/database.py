@@ -25,6 +25,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     Float,
+    ForeignKey,
     Integer,
     String,
     Text,
@@ -141,6 +142,36 @@ class Noticia(Base):
 
     def __repr__(self) -> str:
         return f"<Noticia id={self.id[:8]}... titulo='{self.titulo[:40]}'>"
+
+
+class UserSavedItem(Base):
+    __tablename__ = "user_saved_items"
+
+    user_id: str = Column(String(64), primary_key=True)
+    article_id: str = Column(String(64), ForeignKey("noticias.id", ondelete="CASCADE"), primary_key=True)
+    saved_at: datetime = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+
+class UserArticleSummary(Base):
+    __tablename__ = "user_article_summaries"
+
+    user_id: str = Column(String(64), primary_key=True)
+    article_id: str = Column(String(64), ForeignKey("noticias.id", ondelete="CASCADE"), primary_key=True)
+    language: str = Column(String(2), primary_key=True)
+    summary: str = Column(Text, nullable=False)
+    model: str = Column(String(64), nullable=True)
+    created_at: datetime = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at: datetime = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+
+class UserPreference(Base):
+    __tablename__ = "user_preferences"
+
+    user_id: str = Column(String(64), primary_key=True)
+    language: str = Column(String(2), nullable=False, default="es")
+    theme: str = Column(String(8), nullable=False, default="dark")
+    source_preferences_json: str = Column(Text, nullable=False, default="{}")
+    updated_at: datetime = Column(DateTime, nullable=False, default=datetime.utcnow)
 
 
 # ---------------------------------------------------------------------------
@@ -278,7 +309,8 @@ def limpiar_datos_antiguos(dias_retencion: int = 30) -> dict[str, int]:
                 text(
                     "DELETE FROM noticias "
                     "WHERE fecha_ingesta < :cutoff "
-                    "AND COALESCE(is_favorite, 0) = 0"
+                    "AND NOT EXISTS (SELECT 1 FROM user_saved_items usi WHERE usi.article_id = noticias.id) "
+                    "AND NOT EXISTS (SELECT 1 FROM user_article_summaries uas WHERE uas.article_id = noticias.id)"
                 ),
                 {"cutoff": cutoff},
             )

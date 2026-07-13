@@ -7,10 +7,10 @@
   <link rel="icon" type="image/png" href="/assets/favicon.png?v=logo-v1">
   <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png?v=logo-v1">
   <script>
-    document.documentElement.dataset.theme = localStorage.getItem("newser.theme") || "dark";
-    document.documentElement.lang = localStorage.getItem("newser.language") || "es";
+    document.documentElement.dataset.theme = "dark";
+    document.documentElement.lang = "es";
   </script>
-  <link rel="stylesheet" href="/static/app.css?v=search-suggest-v2">
+  <link rel="stylesheet" href="/static/app.css?v=mobile-preferences-v3">
 </head>
 <body>
   <aside class="sidebar">
@@ -154,6 +154,40 @@
         </span>
       </button>
     </div>
+    <section class="account-section" data-account-panel>
+      <button type="button" class="account-toggle" data-account-toggle aria-expanded="false">
+        <span class="account-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" focusable="false">
+            <circle cx="12" cy="8" r="3.5"></circle>
+            <path d="M5.5 20c.45-4 2.6-6 6.5-6s6.05 2 6.5 6"></path>
+          </svg>
+        </span>
+        <span class="account-copy"><strong data-account-label data-i18n="account.login">Iniciar sesi&oacute;n</strong></span>
+        <span class="account-chevron" aria-hidden="true">&rsaquo;</span>
+      </button>
+      <div class="account-actions" data-account-actions hidden>
+        <button type="button" data-auth-provider="google" aria-label="Continuar con Google" data-i18n-aria-label="account.google">
+          <span class="provider-logo provider-logo-google" aria-hidden="true">
+            <svg viewBox="0 0 24 24" focusable="false">
+              <path fill="#4285F4" d="M21.6 12.23c0-.74-.07-1.45-.19-2.13H12v4.03h5.38a4.6 4.6 0 0 1-1.99 3.02v2.51h3.22c1.89-1.74 2.99-4.31 2.99-7.43z"></path>
+              <path fill="#34A853" d="M12 22c2.7 0 4.96-.9 6.61-2.43l-3.22-2.51c-.89.6-2.03.95-3.39.95-2.6 0-4.8-1.76-5.59-4.12H3.08v2.59A10 10 0 0 0 12 22z"></path>
+              <path fill="#FBBC05" d="M6.41 13.89A6.01 6.01 0 0 1 6.1 12c0-.66.11-1.29.31-1.89V7.52H3.08A10 10 0 0 0 2 12c0 1.61.39 3.13 1.08 4.48l3.33-2.59z"></path>
+              <path fill="#EA4335" d="M12 5.99c1.47 0 2.79.5 3.83 1.5l2.86-2.86A9.6 9.6 0 0 0 12 2a10 10 0 0 0-8.92 5.52l3.33 2.59C7.2 7.75 9.4 5.99 12 5.99z"></path>
+            </svg>
+          </span>
+          <span data-i18n="account.google">Continuar con Google</span>
+        </button>
+        <button type="button" data-auth-provider="github" aria-label="Continuar con GitHub" data-i18n-aria-label="account.github">
+          <span class="provider-logo provider-logo-github" aria-hidden="true">
+            <svg viewBox="0 0 24 24" focusable="false">
+              <path d="M12 2.2a10 10 0 0 0-3.16 19.49c.5.09.68-.22.68-.48v-1.7c-2.78.6-3.37-1.18-3.37-1.18-.45-1.15-1.1-1.46-1.1-1.46-.9-.62.07-.61.07-.61 1 .07 1.53 1.03 1.53 1.03.89 1.52 2.33 1.08 2.9.83.09-.64.35-1.08.63-1.33-2.22-.25-4.55-1.11-4.55-4.94 0-1.09.39-1.98 1.03-2.68-.1-.25-.45-1.27.1-2.65 0 0 .84-.27 2.75 1.02A9.56 9.56 0 0 1 12 7.2c.85 0 1.7.11 2.5.34 1.9-1.29 2.74-1.02 2.74-1.02.55 1.38.2 2.4.1 2.65.64.7 1.03 1.59 1.03 2.68 0 3.84-2.34 4.68-4.57 4.93.36.31.68.92.68 1.85v2.58c0 .27.18.58.69.48A10 10 0 0 0 12 2.2z"></path>
+            </svg>
+          </span>
+          <span data-i18n="account.github">Continuar con GitHub</span>
+        </button>
+        <button type="button" class="account-logout" data-auth-logout hidden data-i18n="account.logout">Cerrar sesi&oacute;n</button>
+      </div>
+    </section>
   </aside>
   <div id="mobile-drawer-backdrop" class="mobile-drawer-backdrop" hidden></div>
 
@@ -185,7 +219,7 @@
 
     <section id="status" class="status" role="status" aria-live="polite"></section>
 
-    <section class="panel overview-only" id="topics-panel">
+    <section class="panel overview-only" id="topics-panel" hidden>
       <div class="section-title compact-title">
         <h3 data-i18n="topics.hot">Temas activos</h3>
       </div>
@@ -215,7 +249,6 @@
         <div class="empty" data-i18n="brief.loading">Cargando brief...</div>
       </section>
       <div class="section-title archive-title">
-        <p class="eyebrow" data-i18n="brief.archive">Archivo</p>
         <h3 data-i18n="brief.previous">Briefs diarios anteriores</h3>
       </div>
       <div id="daily-briefs-list" class="daily-brief-list"></div>
@@ -223,7 +256,7 @@
 
     <section id="mobile-more" class="mobile-more-view" hidden>
       <div class="mobile-more-groups">
-        <section class="mobile-more-card">
+        <section class="mobile-more-card preferences-mobile-card">
           <p class="eyebrow" data-i18n="prefs.title">Preferencias</p>
           <button type="button" data-view-target="sources">
             <span>
@@ -240,16 +273,51 @@
               <button type="button" data-language-option="en" aria-pressed="false">EN</button>
             </span>
           </div>
-          <button class="sidebar-theme-toggle mobile-more-theme-toggle mobile-setting-row" type="button" data-mobile-theme-action aria-label="Cambiar a modo claro" data-i18n-aria-label="theme.toLight" aria-pressed="false">
+          <div class="sidebar-theme-toggle mobile-more-theme-toggle mobile-setting-row">
             <span class="mobile-setting-copy">
               <strong data-i18n="prefs.appearance">Apariencia</strong>
             </span>
-            <span class="mobile-theme-toggle-control" aria-hidden="true">
-              <span data-theme-choice="light" data-i18n="theme.light">Claro</span>
-              <span data-theme-choice="dark" data-i18n="theme.dark">Oscuro</span>
+            <span class="mobile-theme-toggle-control" role="group" aria-label="Apariencia" data-i18n-aria-label="prefs.appearance">
+              <button type="button" data-mobile-theme-action data-theme-value="light" data-theme-choice="light" aria-pressed="false" data-i18n="theme.light">Claro</button>
+              <button type="button" data-mobile-theme-action data-theme-value="dark" data-theme-choice="dark" aria-pressed="true" data-i18n="theme.dark">Oscuro</button>
             </span>
             <span class="sr-only" data-theme-state>Oscuro</span>
+          </div>
+        </section>
+        <section class="mobile-more-card account-mobile-card" data-account-panel>
+          <p class="eyebrow" data-i18n="account.title">Cuenta</p>
+          <button type="button" class="mobile-setting-row account-toggle" data-account-toggle aria-expanded="false">
+            <span class="account-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" focusable="false">
+                <circle cx="12" cy="8" r="3.5"></circle>
+                <path d="M5.5 20c.45-4 2.6-6 6.5-6s6.05 2 6.5 6"></path>
+              </svg>
+            </span>
+            <span class="mobile-setting-copy account-copy"><strong data-account-label data-i18n="account.login">Iniciar sesi&oacute;n</strong></span>
+            <span class="account-chevron" aria-hidden="true">&rsaquo;</span>
           </button>
+          <div class="account-actions" data-account-actions hidden>
+            <button type="button" data-auth-provider="google" aria-label="Continuar con Google" data-i18n-aria-label="account.google">
+              <span class="provider-logo provider-logo-google" aria-hidden="true">
+                <svg viewBox="0 0 24 24" focusable="false">
+                  <path fill="#4285F4" d="M21.6 12.23c0-.74-.07-1.45-.19-2.13H12v4.03h5.38a4.6 4.6 0 0 1-1.99 3.02v2.51h3.22c1.89-1.74 2.99-4.31 2.99-7.43z"></path>
+                  <path fill="#34A853" d="M12 22c2.7 0 4.96-.9 6.61-2.43l-3.22-2.51c-.89.6-2.03.95-3.39.95-2.6 0-4.8-1.76-5.59-4.12H3.08v2.59A10 10 0 0 0 12 22z"></path>
+                  <path fill="#FBBC05" d="M6.41 13.89A6.01 6.01 0 0 1 6.1 12c0-.66.11-1.29.31-1.89V7.52H3.08A10 10 0 0 0 2 12c0 1.61.39 3.13 1.08 4.48l3.33-2.59z"></path>
+                  <path fill="#EA4335" d="M12 5.99c1.47 0 2.79.5 3.83 1.5l2.86-2.86A9.6 9.6 0 0 0 12 2a10 10 0 0 0-8.92 5.52l3.33 2.59C7.2 7.75 9.4 5.99 12 5.99z"></path>
+                </svg>
+              </span>
+              <span data-i18n="account.google">Continuar con Google</span>
+            </button>
+            <button type="button" data-auth-provider="github" aria-label="Continuar con GitHub" data-i18n-aria-label="account.github">
+              <span class="provider-logo provider-logo-github" aria-hidden="true">
+                <svg viewBox="0 0 24 24" focusable="false">
+                  <path d="M12 2.2a10 10 0 0 0-3.16 19.49c.5.09.68-.22.68-.48v-1.7c-2.78.6-3.37-1.18-3.37-1.18-.45-1.15-1.1-1.46-1.1-1.46-.9-.62.07-.61.07-.61 1 .07 1.53 1.03 1.53 1.03.89 1.52 2.33 1.08 2.9.83.09-.64.35-1.08.63-1.33-2.22-.25-4.55-1.11-4.55-4.94 0-1.09.39-1.98 1.03-2.68-.1-.25-.45-1.27.1-2.65 0 0 .84-.27 2.75 1.02A9.56 9.56 0 0 1 12 7.2c.85 0 1.7.11 2.5.34 1.9-1.29 2.74-1.02 2.74-1.02.55 1.38.2 2.4.1 2.65.64.7 1.03 1.59 1.03 2.68 0 3.84-2.34 4.68-4.57 4.93.36.31.68.92.68 1.85v2.58c0 .27.18.58.69.48A10 10 0 0 0 12 2.2z"></path>
+                </svg>
+              </span>
+              <span data-i18n="account.github">Continuar con GitHub</span>
+            </button>
+            <button type="button" class="account-logout" data-auth-logout hidden data-i18n="account.logout">Cerrar sesi&oacute;n</button>
+          </div>
         </section>
       </div>
     </section>
@@ -307,11 +375,11 @@
       </svg>
       <span data-i18n="mobile.briefs">Briefs</span>
     </button>
-    <button type="button" class="mobile-tab" data-view-target="favorites" aria-label="Guardados" data-i18n-aria-label="mobile.saved">
+    <button type="button" class="mobile-tab" data-view-target="favorites" aria-label="Favoritos" data-i18n-aria-label="mobile.saved">
       <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
         <path d="M12 20.2 10.65 19C5.85 14.65 3 12.05 3 8.85 3 6.25 5.05 4.2 7.65 4.2c1.45 0 2.85.68 3.75 1.75h1.2c.9-1.07 2.3-1.75 3.75-1.75 2.6 0 4.65 2.05 4.65 4.65 0 3.2-2.85 5.8-7.65 10.15z"></path>
       </svg>
-      <span data-i18n="mobile.saved">Guardados</span>
+      <span data-i18n="mobile.saved">Favoritos</span>
     </button>
     <button type="button" class="mobile-tab" data-view-target="more" aria-label="Más" data-i18n-aria-label="mobile.more">
       <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
@@ -329,6 +397,36 @@
     <img id="media-modal-image" alt="">
   </div>
 
-  <script src="/static/app.js?v=search-suggest-v2"></script>
+  <dialog id="auth-required-dialog" class="auth-required-dialog" aria-labelledby="auth-required-title">
+    <div class="auth-required-panel">
+      <div class="auth-required-header">
+        <h2 id="auth-required-title" data-i18n="account.promptTitle">Inici&aacute; sesi&oacute;n para continuar</h2>
+        <button id="auth-required-close" class="auth-required-close" type="button" aria-label="Cerrar" data-i18n-aria-label="common.close">x</button>
+      </div>
+      <p id="auth-required-message" class="auth-required-message" hidden></p>
+      <div class="auth-required-actions">
+        <button type="button" class="auth-required-primary" data-login-prompt data-i18n="account.promptAction">Iniciar sesi&oacute;n</button>
+        <button type="button" class="auth-required-secondary" data-auth-dialog-close data-i18n="account.cancel">Cancelar</button>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog id="logout-confirm-dialog" class="auth-required-dialog logout-confirm-dialog" aria-labelledby="logout-confirm-title" aria-describedby="logout-confirm-message">
+    <div class="auth-required-panel logout-confirm-panel">
+      <div class="auth-required-header">
+        <h2 id="logout-confirm-title" data-i18n="account.logoutConfirmTitle">Cerrar sesi&oacute;n</h2>
+        <button id="logout-confirm-close" class="auth-required-close" type="button" aria-label="Cerrar" data-i18n-aria-label="common.close">x</button>
+      </div>
+      <p id="logout-confirm-message" class="auth-required-message logout-confirm-message" data-i18n="account.logoutConfirmMessage">Pod&eacute;s volver a iniciar sesi&oacute;n cuando quieras.</p>
+      <div class="auth-required-actions">
+        <button type="button" class="auth-required-primary logout-confirm-primary" id="logout-confirm-action" data-i18n="account.logoutConfirmAction">Cerrar sesi&oacute;n</button>
+        <button type="button" class="auth-required-secondary" id="logout-confirm-cancel" data-i18n="account.cancel">Cancelar</button>
+      </div>
+    </div>
+  </dialog>
+
+  <script>window.NEWSER_AUTH_CONFIG = {{ auth_config | tojson }};</script>
+  <script src="/static/supabase-2.49.4.min.js"></script>
+  <script src="/static/app.js?v=mobile-preferences-v3"></script>
 </body>
 </html>

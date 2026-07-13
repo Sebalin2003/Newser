@@ -13,7 +13,15 @@ from sqlalchemy import create_engine, inspect
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.orm import sessionmaker
 
-from src.database import Base, DynamicKeyword, MacroResumen, Noticia
+from src.database import (
+    Base,
+    DynamicKeyword,
+    MacroResumen,
+    Noticia,
+    UserArticleSummary,
+    UserPreference,
+    UserSavedItem,
+)
 from src import database, dynamic_keywords, web_services
 
 
@@ -192,15 +200,14 @@ class WebServiceTestCase(unittest.TestCase):
         self.assertEqual(all_result["fecha"], "all")
         self.assertEqual(all_result["hot_topics"], [])
 
-    def test_feed_excludes_low_relevance_scores(self) -> None:
+    def test_feed_includes_low_relevance_scores_without_threshold(self) -> None:
         today = datetime.now(web_services.BRIEF_TIMEZONE).date().isoformat()
         self.add_article("technical", "Developer SDK release", "GitHub Blog", "developer_tools", 60)
         self.add_article("off-topic", "Celebrity opens public library", "Hacker News", "developer_tools", 48)
 
         ids = [item["id"] for item in web_services.get_feed(fecha=today)["items"]]
 
-        self.assertIn("technical", ids)
-        self.assertNotIn("off-topic", ids)
+        self.assertEqual(ids[:2], ["technical", "off-topic"])
 
     def test_feed_deduplicates_repeated_articles_by_url_after_sorting(self) -> None:
         today = datetime.now(web_services.BRIEF_TIMEZONE).date().isoformat()
@@ -385,7 +392,7 @@ class WebServiceTestCase(unittest.TestCase):
         self.add_article("no-key", "Needs summary", "Reuters", "general", 60)
 
         with patch.dict(os.environ, {"GEMINI_API_KEY": ""}, clear=False):
-            result = web_services.generate_summary("no-key")
+            result = web_services.generate_summary("no-key", "user-a")
 
         self.assertFalse(result["ok"])
         self.assertIn("GEMINI_API_KEY", result["reason"])
@@ -396,10 +403,10 @@ class WebServiceTestCase(unittest.TestCase):
         with patch.dict(os.environ, {"GEMINI_API_KEY": "key"}, clear=False), \
              patch.object(web_services, "_get_summary_lock", wraps=web_services._get_summary_lock) as get_lock, \
              patch("src.processor.generar_resumen_individual", return_value={"ok": True, "summary": "Done"}):
-            result = web_services.generate_summary("locked-summary", lang="en")
+            result = web_services.generate_summary("locked-summary", "user-a", lang="en")
 
         self.assertTrue(result["ok"])
-        get_lock.assert_called_once_with("locked-summary", "en")
+        get_lock.assert_called_once_with("user-a", "locked-summary", "en")
 
     def test_feed_uses_language_specific_summary_and_area_label(self) -> None:
         today = datetime.now(web_services.BRIEF_TIMEZONE).date().isoformat()
@@ -413,10 +420,16 @@ class WebServiceTestCase(unittest.TestCase):
             summary_en="English summary",
         )
 
-        spanish = web_services.get_feed(fecha=today, lang="es")["items"][0]
-        english = web_services.get_feed(fecha=today, lang="en")["items"][0]
+        with self.session_factory() as session:
+            session.add_all([
+                UserArticleSummary(user_id="user-a", article_id="localized", language="es", summary="Spanish summary"),
+                UserArticleSummary(user_id="user-a", article_id="localized", language="en", summary="English summary"),
+            ])
+            session.commit()
+        spanish = web_services.get_feed(fecha=today, lang="es", user_id="user-a")["items"][0]
+        english = web_services.get_feed(fecha=today, lang="en", user_id="user-a")["items"][0]
 
-        self.assertEqual(spanish["resumen_ia"], "Resumen español")
+        self.assertEqual(spanish["resumen_ia"], "Spanish summary")
         self.assertEqual(spanish["area_label"], "IA y agentes")
         self.assertEqual(english["resumen_ia"], "English summary")
         self.assertEqual(english["area_label"], "AI & Agents")
@@ -451,18 +464,20 @@ class WebServiceTestCase(unittest.TestCase):
              patch("src.processor.GEMINI_API_KEY", "key"), \
              patch("src.processor._generar_resumen_gemini", return_value='{"resumen":"English summary"}'), \
              patch("src.processor.get_session", self.temporary_session):
-            result = web_services.generate_summary("needs-en", lang="en")
+            result = web_services.generate_summary("needs-en", "user-a", lang="en")
 
         self.assertTrue(result["ok"])
         self.assertEqual(result["summary"], "English summary")
         with self.session_factory() as session:
             row = session.get(Noticia, "needs-en")
             self.assertEqual(row.resumen_ia, "Resumen español")
-            self.assertEqual(row.resumen_ia_en, "English summary")
+            self.assertIsNone(row.resumen_ia_en)
+            private = session.get(UserArticleSummary, ("user-a", "needs-en", "en"))
+            self.assertEqual(private.summary, "English summary")
 
     def test_missing_article_message_is_localized(self) -> None:
-        spanish = web_services.generate_summary("missing", lang="es")
-        english = web_services.generate_summary("missing", lang="en")
+        spanish = web_services.generate_summary("missing", "user-a", lang="es")
+        english = web_services.generate_summary("missing", "user-a", lang="en")
 
         self.assertEqual(spanish["reason"], "Artículo no encontrado.")
         self.assertEqual(english["reason"], "Article not found.")
@@ -642,6 +657,20 @@ class WebServiceTestCase(unittest.TestCase):
         self.assertIn("is_favorite", columns)
         self.assertIn("favorited_at", columns)
 
+    def test_private_user_tables_are_declared(self) -> None:
+        inspector = inspect(self.engine)
+        self.assertIn("user_saved_items", inspector.get_table_names())
+        self.assertIn("user_article_summaries", inspector.get_table_names())
+        self.assertIn("user_preferences", inspector.get_table_names())
+
+        saved_pk = inspector.get_pk_constraint("user_saved_items")["constrained_columns"]
+        summary_pk = inspector.get_pk_constraint("user_article_summaries")["constrained_columns"]
+        preferences_pk = inspector.get_pk_constraint("user_preferences")["constrained_columns"]
+
+        self.assertEqual(saved_pk, ["user_id", "article_id"])
+        self.assertEqual(summary_pk, ["user_id", "article_id", "language"])
+        self.assertEqual(preferences_pk, ["user_id"])
+
     def test_media_columns_are_declared_and_serialized(self) -> None:
         columns = {column["name"] for column in inspect(self.engine).get_columns("noticias")}
         self.assertIn("media_url", columns)
@@ -710,12 +739,12 @@ class WebServiceTestCase(unittest.TestCase):
     def test_mark_and_remove_favorite(self) -> None:
         self.add_article("fav-1", "Favorite story", "Reuters", "ai_agents", 82)
 
-        marked = web_services.mark_favorite("fav-1")
+        marked = web_services.mark_favorite("fav-1", "user-a")
         self.assertTrue(marked["ok"])
         self.assertTrue(marked["is_favorite"])
         self.assertIsNotNone(marked["favorited_at"])
 
-        removed = web_services.remove_favorite("fav-1")
+        removed = web_services.remove_favorite("fav-1", "user-a")
         self.assertTrue(removed["ok"])
         self.assertFalse(removed["is_favorite"])
         self.assertIsNone(removed["favorited_at"])
@@ -726,15 +755,13 @@ class WebServiceTestCase(unittest.TestCase):
         self.add_article("not-fav", "Regular story", "Reuters", "ai_agents", 95)
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
-            session.query(Noticia).filter(Noticia.id == "old-fav").update(
-                {"is_favorite": 1, "favorited_at": now - timedelta(hours=2)}
-            )
-            session.query(Noticia).filter(Noticia.id == "new-fav").update(
-                {"is_favorite": 1, "favorited_at": now}
-            )
+            session.add_all([
+                UserSavedItem(user_id="user-a", article_id="old-fav", saved_at=now - timedelta(hours=2)),
+                UserSavedItem(user_id="user-a", article_id="new-fav", saved_at=now),
+            ])
             session.commit()
 
-        result = web_services.get_favorites()
+        result = web_services.get_favorites("user-a")
 
         self.assertEqual(result["count"], 2)
         self.assertEqual([item["id"] for item in result["items"]], ["new-fav", "old-fav"])
@@ -749,9 +776,10 @@ class WebServiceTestCase(unittest.TestCase):
                 {"fecha_ingesta": old},
                 synchronize_session=False,
             )
-            session.query(Noticia).filter(Noticia.id == "keep-fav").update(
-                {"is_favorite": 1, "favorited_at": datetime.now(timezone.utc).replace(tzinfo=None)}
-            )
+            session.add(UserSavedItem(
+                user_id="user-a", article_id="keep-fav",
+                saved_at=datetime.now(timezone.utc).replace(tzinfo=None),
+            ))
             session.commit()
 
         with patch.object(database, "engine", self.engine):
@@ -762,9 +790,68 @@ class WebServiceTestCase(unittest.TestCase):
         self.assertIn("keep-fav", ids)
         self.assertNotIn("remove-old", ids)
 
+    def test_private_state_is_isolated_between_users(self) -> None:
+        self.add_article("isolated", "Private state", "Reuters", "ai_agents", 90)
+        web_services.mark_favorite("isolated", "user-a")
+        with self.session_factory() as session:
+            session.add(UserArticleSummary(
+                user_id="user-a", article_id="isolated", language="es", summary="Private summary",
+            ))
+            session.commit()
+
+        user_a = web_services.get_feed(user_id="user-a")["items"][0]
+        user_b = web_services.get_feed(user_id="user-b")["items"][0]
+        guest = web_services.get_feed()["items"][0]
+
+        self.assertTrue(user_a["is_favorite"])
+        self.assertEqual(user_a["resumen_ia"], "Private summary")
+        self.assertFalse(user_b["is_favorite"])
+        self.assertEqual(user_b["resumen_ia"], "")
+        self.assertFalse(guest["is_favorite"])
+        self.assertEqual(guest["resumen_ia"], "")
+
+    def test_preferences_default_persist_and_validate_per_user(self) -> None:
+        self.assertEqual(
+            web_services.get_preferences("new-user"),
+            {"language": "es", "theme": "dark", "source_preferences": {}},
+        )
+
+        updated = web_services.update_preferences(
+            "user-a",
+            language="en",
+            theme="light",
+            source_preferences={"OpenAI Blog": "prioritized", "Reuters": "hidden"},
+        )
+
+        self.assertEqual(updated["language"], "en")
+        self.assertEqual(updated["theme"], "light")
+        self.assertEqual(updated["source_preferences"]["OpenAI Blog"], "prioritized")
+        self.assertEqual(web_services.get_preferences("user-b")["source_preferences"], {})
+
+        invalid_payloads = [
+            {"language": "fr", "theme": "dark", "source_preferences": {}},
+            {"language": "es", "theme": "sepia", "source_preferences": {}},
+            {"language": "es", "theme": "dark", "source_preferences": {"Unknown": "hidden"}},
+            {"language": "es", "theme": "dark", "source_preferences": {"Reuters": "boosted"}},
+        ]
+        for payload in invalid_payloads:
+            with self.subTest(payload=payload), self.assertRaises(ValueError):
+                web_services.update_preferences("user-a", **payload)
 
 @unittest.skipUnless(importlib.util.find_spec("fastapi"), "FastAPI is not installed")
 class WebApiRouteTests(unittest.TestCase):
+    def setUp(self) -> None:
+        import web_app
+        from src.auth import AuthenticatedUser
+
+        web_app.app.dependency_overrides[web_app.require_user] = lambda: AuthenticatedUser(
+            id="user-a", email="user@example.com", name="User Example",
+        )
+
+    def tearDown(self) -> None:
+        import web_app
+        web_app.app.dependency_overrides.clear()
+
     def test_feed_route_delegates_to_service(self) -> None:
         from fastapi.testclient import TestClient
         import web_app
@@ -776,6 +863,78 @@ class WebApiRouteTests(unittest.TestCase):
         self.assertEqual(response.json()["count"], 0)
         self.assertEqual(get_feed.call_args.kwargs["lang"], "en")
         self.assertEqual(get_feed.call_args.kwargs["prioritized_fuentes"], ["OpenAI Blog"])
+
+    def test_protected_routes_require_authentication(self) -> None:
+        from fastapi.testclient import TestClient
+        import web_app
+
+        web_app.app.dependency_overrides.clear()
+        client = TestClient(web_app.app)
+        valid_preferences = {
+            "language": "es",
+            "theme": "dark",
+            "source_preferences": {},
+        }
+        requests = [
+            ("GET", "/api/me", None),
+            ("GET", "/api/preferences", None),
+            ("PUT", "/api/preferences", valid_preferences),
+            ("GET", "/api/favorites", None),
+            ("POST", "/api/articles/article-1/summary", None),
+            ("POST", "/api/articles/article-1/favorite", None),
+            ("DELETE", "/api/articles/article-1/favorite", None),
+        ]
+
+        for method, url, body in requests:
+            with self.subTest(method=method, url=url):
+                response = client.request(method, url, json=body)
+                self.assertEqual(response.status_code, 401)
+
+    def test_authenticated_routes_use_dependency_user_identity(self) -> None:
+        from fastapi.testclient import TestClient
+        import web_app
+
+        client = TestClient(web_app.app)
+
+        response = client.get("/api/me")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"id": "user-a", "email": "user@example.com", "name": "User Example"})
+
+        with patch.object(web_app.web_services, "get_preferences", return_value={"language": "es", "theme": "dark", "source_preferences": {}}) as get_preferences:
+            response = client.get("/api/preferences")
+        self.assertEqual(response.status_code, 200)
+        get_preferences.assert_called_once_with("user-a")
+
+        with patch.object(web_app.web_services, "update_preferences", return_value={"language": "en", "theme": "light", "source_preferences": {}}) as update_preferences:
+            response = client.put("/api/preferences", json={
+                "user_id": "attacker",
+                "language": "en",
+                "theme": "light",
+                "source_preferences": {},
+            })
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(update_preferences.call_args.args[0], "user-a")
+        self.assertNotEqual(update_preferences.call_args.args[0], "attacker")
+
+        with patch.object(web_app.web_services, "get_favorites", return_value={"items": [], "count": 0}) as get_favorites:
+            response = client.get("/api/favorites?lang=en")
+        self.assertEqual(response.status_code, 200)
+        get_favorites.assert_called_once_with("user-a", lang="en")
+
+        with patch.object(web_app.web_services, "generate_summary", return_value={"ok": True, "summary": "Done"}) as generate_summary:
+            response = client.post("/api/articles/article-1/summary?lang=en")
+        self.assertEqual(response.status_code, 200)
+        generate_summary.assert_called_once_with("article-1", "user-a", lang="en")
+
+        with patch.object(web_app.web_services, "mark_favorite", return_value={"ok": True, "is_favorite": True}) as mark_favorite:
+            response = client.post("/api/articles/article-1/favorite?lang=en")
+        self.assertEqual(response.status_code, 200)
+        mark_favorite.assert_called_once_with("article-1", "user-a", lang="en")
+
+        with patch.object(web_app.web_services, "remove_favorite", return_value={"ok": True, "is_favorite": False}) as remove_favorite:
+            response = client.delete("/api/articles/article-1/favorite?lang=en")
+        self.assertEqual(response.status_code, 200)
+        remove_favorite.assert_called_once_with("article-1", "user-a", lang="en")
 
     def test_summary_route_returns_clear_error_status(self) -> None:
         from fastapi.testclient import TestClient
@@ -1143,6 +1302,30 @@ class WebUiStaticTests(unittest.TestCase):
         self.assertIn('requestLanguage !== state.language || state.view !== "briefs"', script)
         self.assertIn("if (requestId === dailyBriefRequestId)", script)
         self.assertIn("loadFavorites", script)
+        self.assertIn("function renderArticleSkeleton", script)
+        self.assertIn("function renderFeedSkeleton", script)
+        self.assertIn("function renderInitialFeedSkeleton", script)
+        self.assertIn("function renderDailyBriefSkeleton", script)
+        self.assertIn("function renderFavoritesSkeleton", script)
+        self.assertIn("renderFeedSkeleton();", script)
+        self.assertIn("renderInitialFeedSkeleton();", script)
+        self.assertIn("renderDailyBriefSkeleton();", script)
+        self.assertIn("renderFavoritesSkeleton();", script)
+        self.assertIn("dailyBriefArchiveTitle.hidden = true", script)
+        self.assertIn("dailyBriefArchiveTitle.hidden = false", script)
+        self.assertNotIn('"status.loadingDashboard"', script)
+        self.assertNotIn("Cargando panel", script)
+        self.assertNotIn('"status.loadingBriefs"', script)
+        self.assertNotIn('"status.loadingFavorites"', script)
+        self.assertNotIn('"brief.archive"', script)
+        self.assertNotIn('data-i18n="brief.archive"', template)
+        self.assertNotIn(">Archivo<", template)
+        self.assertIn(".article-skeleton", styles)
+        self.assertIn(".daily-brief-skeleton", styles)
+        self.assertIn(".shimmer-line", styles)
+        self.assertIn(".shimmer-media", styles)
+        self.assertIn("@keyframes shimmer", styles)
+        self.assertIn("prefers-reduced-motion: reduce", styles)
         self.assertIn('fetchJson(withLanguage("/api/brief"))', script)
         self.assertIn("/api/daily-briefs", script)
         self.assertNotIn("formatDate(data.fecha_generacion)", script)
@@ -1167,6 +1350,72 @@ class WebUiStaticTests(unittest.TestCase):
         self.assertNotIn("setStatus(i18n(\"status.generatingSummary\"))", generate_summary_block)
         self.assertIn('button.setAttribute("aria-busy", "true")', script)
         self.assertIn("function applyGeneratedSummary", script)
+        self.assertIn('"account.promptTitle": "Sign in to continue"', script)
+        self.assertNotIn('"account.prompt"', script)
+        self.assertIn('flowType: "pkce"', script)
+        self.assertIn("detectSessionInUrl: false", script)
+        self.assertIn("function authStorage()", script)
+        self.assertIn("function cookieStorage()", script)
+        self.assertIn("storage: authStorage()", script)
+        self.assertIn("storageKey: authStorageKey", script)
+        self.assertIn("function sessionFromOAuthRedirect()", script)
+        self.assertIn("authClient.auth.setSession", script)
+        self.assertIn("authClient.auth.exchangeCodeForSession", script)
+        self.assertIn("cleanOAuthUrl();", script)
+        self.assertIn('"account.noSession": "Google returned without an active session. Please sign in again."', script)
+        self.assertIn('"account.externalCodeError": "Google sign-in could not be completed. Check the redirect URI, client ID, and client secret in Supabase."', script)
+        self.assertIn("function authErrorMessage(error)", script)
+        self.assertIn('includes("unable to exchange external code")', script)
+        self.assertIn("function hasOAuthReturnParams()", script)
+        self.assertIn("function oauthReturnSnapshot()", script)
+        self.assertIn("function authReturnDiagnostic(message)", script)
+        self.assertIn("async function ensureUser(trigger)", script)
+        self.assertIn("async function currentSupabaseSession()", script)
+        self.assertIn("function waitForSupabaseSession", script)
+        self.assertIn("waitForSupabaseSession(16)", script)
+        self.assertIn("if (!await ensureUser(button)) return", script)
+        ensure_user_block = script.split("async function ensureUser", maxsplit=1)[1].split("async function savePreferences", maxsplit=1)[0]
+        self.assertLess(ensure_user_block.index("showAuthRequiredDialog(trigger)"), ensure_user_block.index("await currentSupabaseSession()"))
+        self.assertIn("function userFromSession(session)", script)
+        self.assertIn("state.user = userFromSession(session)", script)
+        self.assertIn("closeAuthRequiredDialog(false)", script)
+        self.assertIn("function showAuthRequiredDialog", script)
+        self.assertIn("function showFavoritesSignInPrompt", script)
+        self.assertIn("function showLogoutConfirmDialog(trigger)", script)
+        self.assertIn("async function confirmLogout()", script)
+        self.assertIn("logoutConfirmAction?.addEventListener(\"click\", confirmLogout)", script)
+        self.assertIn("data-login-prompt", script)
+        self.assertIn('id="auth-required-dialog"', template)
+        self.assertIn('id="logout-confirm-dialog"', template)
+        self.assertIn('id="logout-confirm-action"', template)
+        self.assertIn('id="logout-confirm-message"', template)
+        self.assertIn("logout-confirm-panel", template)
+        self.assertIn("logout-confirm-primary", template)
+        self.assertIn('"account.logoutConfirmMessage": "You can sign back in whenever you need."', script)
+        self.assertIn(".logout-confirm-panel", styles)
+        self.assertIn(".logout-confirm-primary", styles)
+        self.assertIn("rgba(255, 123, 123, 0.14)", styles)
+        logout_listener_block = script.split("authLogoutButtons.forEach", maxsplit=1)[1].split("const oauthError", maxsplit=1)[0]
+        self.assertIn("showLogoutConfirmDialog(button)", logout_listener_block)
+        self.assertNotIn("signOut", logout_listener_block)
+        self.assertIn('id="auth-required-message"', template)
+        self.assertNotIn('id="auth-required-body"', template)
+        self.assertNotIn('aria-describedby="auth-required-body"', template)
+        self.assertNotIn("auth-required-icon", template)
+        self.assertIn("auth-required-header", template)
+        self.assertIn(".auth-required-message", styles)
+        self.assertIn("auth-required-dialog", styles)
+        self.assertIn(".auth-required-header", styles)
+        self.assertIn("max-width: min(420px", styles)
+        self.assertIn("min-height: 44px", styles)
+        self.assertIn("text-align: center", styles)
+        auth_title_styles = styles.split(".auth-required-panel h2 {", maxsplit=1)[1].split("}", maxsplit=1)[0]
+        self.assertIn("width: auto", auth_title_styles)
+        auth_actions_styles = styles.split(".auth-required-actions {", maxsplit=1)[1].split("}", maxsplit=1)[0]
+        self.assertIn("justify-content: center", auth_actions_styles)
+        self.assertIn("grid-template-columns: repeat(2, minmax(0, 1fr))", auth_actions_styles)
+        self.assertIn("provider-logo-google", template)
+        self.assertIn("provider-logo-github", template)
         self.assertNotIn("escapeHtml(summary).slice(0, 420)", script)
         self.assertNotIn("String(summary || \"\").slice(0, 420)", script)
         self.assertIn("function renderMediaPreview", script)
@@ -1178,14 +1427,16 @@ class WebUiStaticTests(unittest.TestCase):
         self.assertIn('id="media-modal-image"', template)
         generate_summary_block = script.split("async function generateSummary", maxsplit=1)[1].split("async function toggleFavorite", maxsplit=1)[0]
         self.assertNotIn("await loadAll()", generate_summary_block)
+        hydrate_block = script.split("async function hydrateAuthenticatedUser", maxsplit=1)[1].split("async function beginOAuth", maxsplit=1)[0]
+        self.assertNotIn("state.user = null;\n    renderAccount();\n    setStatus(error.message, true);", hydrate_block)
         favorite_markup = script.split('const favoriteButton = `', maxsplit=1)[1].split("  return `", maxsplit=1)[0]
         self.assertNotIn("<span>", favorite_markup)
         self.assertIn("M8 13.8", script)
         self.assertIn("Usá el botón de corazón", script)
         self.assertNotIn("Saved to favorites.", script)
         self.assertNotIn("Removed from favorites.", script)
-        self.assertIn("/static/app.js?v=search-suggest-v2", template)
-        self.assertIn("/static/app.css?v=search-suggest-v2", template)
+        self.assertIn("/static/app.js?v=mobile-preferences-v3", template)
+        self.assertIn("/static/app.css?v=mobile-preferences-v3", template)
         self.assertIn('placeholder="Buscar"', template)
         self.assertIn('"search.placeholder": "Buscar"', script)
         self.assertIn('"search.placeholder": "Search"', script)
@@ -1194,15 +1445,21 @@ class WebUiStaticTests(unittest.TestCase):
         self.assertIn('aria-label="Cambiar a modo claro"', template)
         self.assertIn('data-language-option="es"', template)
         self.assertIn('data-language-option="en"', template)
-        self.assertIn('window.localStorage.getItem("newser.language")', script)
-        self.assertIn('window.localStorage.setItem("newser.language", nextLanguage)', script)
+        self.assertNotIn('window.localStorage.getItem("newser.language")', script)
+        self.assertNotIn('window.localStorage.setItem("newser.language", nextLanguage)', script)
         self.assertIn('return state.language === "en" ? "en-US" : "es-AR"', script)
         self.assertIn('fetchJson(withLanguage(`/api/articles/${encodeURIComponent(articleId)}/summary`)', script)
         self.assertIn('document.documentElement.dataset.theme', template)
-        self.assertIn('localStorage.getItem("newser.theme") || "dark"', template)
+        self.assertIn('document.documentElement.dataset.theme = "dark"', template)
         self.assertIn("function initTheme()", script)
-        self.assertIn("function setTheme(theme)", script)
-        self.assertIn('window.localStorage.setItem("newser.theme", selectedTheme)', script)
+        self.assertIn("function setTheme(theme, persist = false)", script)
+        self.assertIn("const themeValue = button.dataset.themeValue", script)
+        self.assertIn('const nextTheme = button.dataset.themeValue || (currentTheme === "light" ? "dark" : "light")', script)
+        init_theme_block = script.split("function initTheme()", maxsplit=1)[1].split("function initLanguage()", maxsplit=1)[0]
+        init_language_block = script.split("function initLanguage()", maxsplit=1)[1].split("function isPhoneViewport()", maxsplit=1)[0]
+        self.assertNotIn("ensureUser", init_theme_block)
+        self.assertNotIn("ensureUser", init_language_block)
+        self.assertNotIn('window.localStorage.setItem("newser.theme", selectedTheme)', script)
         self.assertIn("initTheme();", script)
         self.assertIn('html[data-theme="light"]', styles)
         self.assertIn("color-scheme: light", styles)
@@ -1272,6 +1529,10 @@ class WebUiStaticTests(unittest.TestCase):
         self.assertIn("function syncExpandableTextLabels", script)
         self.assertIn("data-full-text", script)
         self.assertIn("data-short-text", script)
+        self.assertIn('data-expandable-available="false"', script)
+        self.assertIn("const hasOverflow = text.scrollHeight > text.clientHeight + 1", script)
+        self.assertIn("button.dataset.expandableAvailable = String(hasOverflow)", script)
+        self.assertNotIn("const expandableAvailable = shortText !== text", script)
         self.assertIn("expandableAvailable", script)
         self.assertIn("const summaryPreview = textPreview(summary", script)
         self.assertIn('expandableText(summary, "article-summary", titleParts.title, summaryPreview)', script)
@@ -1279,6 +1540,8 @@ class WebUiStaticTests(unittest.TestCase):
         self.assertIn("data-expandable-text", script)
         self.assertIn("expandable-text", styles)
         self.assertIn('.expandable-text[data-expandable-available="true"] small', styles)
+        base_styles = styles.split("@media (max-width", maxsplit=1)[0]
+        self.assertIn('.expandable-text[data-expandable-available="true"] small', base_styles)
         self.assertIn(".article-summary[aria-expanded=\"false\"] span", styles)
         self.assertIn(".brief-text[aria-expanded=\"false\"] span", styles)
         self.assertNotIn("article-reason", script)
@@ -1324,7 +1587,9 @@ class WebUiStaticTests(unittest.TestCase):
         self.assertNotIn("Cambiar tema", preferences_section)
         self.assertIn('data-view-target="sources"', template)
         self.assertIn('id="source-preferences"', template)
-        self.assertIn("/static/app.css?v=search-suggest-v2", template)
+        self.assertIn("/static/app.css?v=mobile-preferences-v3", template)
+        sources_nav_block = script.split('target === "sources"', maxsplit=1)[1].split('target === "more"', maxsplit=1)[0]
+        self.assertIn("ensureUser(button)", sources_nav_block)
         source_preferences = template.split('id="source-preferences"', maxsplit=1)[1].split("</section>", maxsplit=1)[0]
         self.assertNotIn('data-i18n="sources.kicker"', source_preferences)
         self.assertNotIn('data-i18n="sources.title"', source_preferences)
@@ -1357,7 +1622,7 @@ class WebUiStaticTests(unittest.TestCase):
         self.assertIn('"sources.applied": "Applied"', script)
         self.assertIn('"favorites.emptyBody": "Use the heart button on any article to save it here for follow-up."', script)
         self.assertIn('"sources.role.OpenAIBlog": "Official OpenAI and AI updates."', script)
-        self.assertIn('SOURCE_PREFERENCE_STORAGE_KEY = "newser.sourcePreferences"', script)
+        self.assertNotIn('SOURCE_PREFERENCE_STORAGE_KEY = "newser.sourcePreferences"', script)
         self.assertIn("function defaultSourcePreferences()", script)
         self.assertIn("function applySourcePreferencesToFilters()", script)
         self.assertIn("appliedSourcePreferences", script)
@@ -1365,7 +1630,11 @@ class WebUiStaticTests(unittest.TestCase):
         self.assertIn("state.pendingLoad = true", script)
         self.assertIn("if (state.pendingLoad)", script)
         self.assertIn("const hasRenderedFeed = Boolean(feed.children.length)", script)
-        self.assertIn("if (!hasRenderedFeed) document.body.classList.add(\"is-loading\")", script)
+        self.assertIn("document.body.classList.add(\"is-loading\")", script)
+        feed_loading_block = script.split("async function loadAll()", maxsplit=1)[1].split("async function loadDailyBriefs()", maxsplit=1)[0]
+        self.assertLess(feed_loading_block.index("renderFeedSkeleton();"), feed_loading_block.index("fetchJson(`/api/feed?${params}`"))
+        startup_block = script.split("syncDateMode();", maxsplit=1)[1].split("window.setInterval", maxsplit=1)[0]
+        self.assertLess(startup_block.index("renderInitialFeedSkeleton();"), startup_block.index("initAuth().finally(loadAll);"))
         self.assertIn("state.appliedSourcePreferences = { ...state.sourcePreferences }", script)
         self.assertIn("saveSourcePreferences();", script)
         self.assertIn("function syncSourceFilterVisibility()", script)
@@ -1420,9 +1689,11 @@ class WebUiStaticTests(unittest.TestCase):
         self.assertIn(".source-preference-badge", styles)
 
     def test_hot_topics_render_multi_source_details(self) -> None:
+        template = Path("templates/index.html").read_text(encoding="utf-8")
         script = Path("static/app.js").read_text(encoding="utf-8")
         styles = Path("static/app.css").read_text(encoding="utf-8")
 
+        self.assertIn('id="topics-panel" hidden', template)
         self.assertIn('"topics.empty": "No multi-source hot topics for this date yet."', script)
         self.assertIn('document.querySelector("#topics-panel")', script)
         self.assertIn("panel.hidden = true", script)
@@ -1497,6 +1768,10 @@ class WebUiStaticTests(unittest.TestCase):
         self.assertNotIn('id="mobile-theme-toggle"', template)
         self.assertIn('id="mobile-drawer-backdrop"', template)
         self.assertIn('class="mobile-tabbar"', template)
+        self.assertIn('"mobile.saved": "Favoritos"', script)
+        self.assertIn('"mobile.saved": "Saved"', script)
+        self.assertIn('aria-label="Favoritos" data-i18n-aria-label="mobile.saved"', template)
+        self.assertIn('<span data-i18n="mobile.saved">Favoritos</span>', template)
         self.assertIn('data-view-target="more"', template)
         self.assertIn('id="mobile-more"', template)
         mobile_more = template.split('id="mobile-more"', maxsplit=1)[1].split('id="source-preferences"', maxsplit=1)[0]
@@ -1511,8 +1786,13 @@ class WebUiStaticTests(unittest.TestCase):
         self.assertIn("Apariencia", mobile_more)
         self.assertNotIn("About", mobile_more)
         self.assertNotIn("IT News Trend Analyzer for AI", mobile_more)
+        self.assertIn("preferences-mobile-card", mobile_more)
         self.assertIn("mobile-more-theme-toggle", mobile_more)
         self.assertIn("mobile-theme-toggle-control", mobile_more)
+        self.assertNotIn('class="sidebar-theme-toggle mobile-more-theme-toggle mobile-setting-row" type="button"', mobile_more)
+        self.assertIn('class="sidebar-theme-toggle mobile-more-theme-toggle mobile-setting-row"', mobile_more)
+        self.assertIn('data-mobile-theme-action data-theme-value="light"', mobile_more)
+        self.assertIn('data-mobile-theme-action data-theme-value="dark"', mobile_more)
         self.assertIn('data-theme-choice="light"', mobile_more)
         self.assertIn('data-theme-choice="dark"', mobile_more)
         self.assertIn('class="sr-only" data-theme-state', mobile_more)
@@ -1537,8 +1817,32 @@ class WebUiStaticTests(unittest.TestCase):
         self.assertIn(".mobile-more-view", styles)
         self.assertIn(".mobile-more-theme-toggle", styles)
         self.assertIn(".mobile-theme-toggle-control", styles)
-        self.assertIn('span[data-theme-choice="light"]', styles)
-        self.assertIn('span[data-theme-choice="dark"]', styles)
+        self.assertIn(".preferences-mobile-card", styles)
+        preference_row_styles = styles.split(".preferences-mobile-card > button,", maxsplit=1)[1].split("}", maxsplit=1)[0]
+        self.assertIn("background: var(--control)", preference_row_styles)
+        self.assertIn("border: 1px solid var(--line-soft)", preference_row_styles)
+        self.assertIn("border-radius: 10px", preference_row_styles)
+        self.assertIn("min-height: 58px", preference_row_styles)
+        self.assertIn('.preferences-mobile-card > button > span[aria-hidden="true"]', styles)
+        mobile_preference_theme_styles = styles.split(".preferences-mobile-card > .mobile-more-theme-toggle {", maxsplit=1)[1].split("}", maxsplit=1)[0]
+        self.assertIn("background: var(--control)", mobile_preference_theme_styles)
+        self.assertIn("border: 1px solid var(--line-soft)", mobile_preference_theme_styles)
+        mobile_preference_row_styles = styles.split("  .preferences-mobile-card > button,\n  .preferences-mobile-card > .mobile-setting-row {", maxsplit=1)[1].split("}", maxsplit=1)[0]
+        self.assertIn("padding: 10px 11px", mobile_preference_row_styles)
+        mobile_more_row_styles = styles.split(".mobile-more-card > button,", maxsplit=1)[1].split("}", maxsplit=1)[0]
+        self.assertIn(".mobile-setting-row", mobile_more_row_styles)
+        self.assertIn("min-height: 62px", mobile_more_row_styles)
+        mobile_segment_selector = ".mobile-language-toggle,\n.mobile-theme-toggle-control {\n  background: var(--panel);"
+        self.assertIn(mobile_segment_selector, styles)
+        mobile_segment_styles = styles.split(
+            mobile_segment_selector,
+            maxsplit=1,
+        )[1].split("}", maxsplit=1)[0]
+        self.assertIn("flex: 0 0 132px", mobile_segment_styles)
+        self.assertIn("min-height: 38px", mobile_segment_styles)
+        self.assertIn(".mobile-more-theme-toggle:hover", styles)
+        self.assertIn('button[data-theme-choice="light"]', styles)
+        self.assertIn('button[data-theme-choice="dark"]', styles)
         self.assertIn(".sr-only", styles)
         self.assertIn("const themeStateLabels", script)
         self.assertIn("[data-theme-state]", script)

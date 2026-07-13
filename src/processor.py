@@ -1237,7 +1237,7 @@ def enriquecer_con_ia(config: dict, max_noticias: int = 10, progress_callback: C
 
 
 def generar_resumen_individual(n_id: str, titulo: str, language: str | None = None) -> dict[str, Any]:
-    """Genera un resumen para un único artículo con Gemini y persiste el resultado."""
+    """Genera un resumen interactivo; el servicio web decide dónde persistirlo."""
     lang = normalize_language(language)
     if not GEMINI_AVAILABLE:
         return {
@@ -1262,15 +1262,6 @@ def generar_resumen_individual(n_id: str, titulo: str, language: str | None = No
         raw = _generar_resumen_gemini(titulo, progress_callback=None, interactive=True, language=lang)
         parsed = _parsear_json_ia(raw)
         res = parsed["resumen"]
-
-        with get_session() as session:
-            nd = session.get(Noticia, n_id)
-            if nd:
-                if lang == "en":
-                    nd.resumen_ia_en = res
-                else:
-                    nd.resumen_ia = res
-            session.commit()
 
         if res == "Resumen no disponible":
             reason = LAST_GEMINI_ERROR or (

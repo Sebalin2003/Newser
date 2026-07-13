@@ -8,12 +8,14 @@ $ErrorActionPreference = "Stop"
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 $depsPath = Join-Path $repoRoot ".deps"
 $tempDb = Join-Path ([System.IO.Path]::GetTempPath()) ("newser_verify_{0}.db" -f [guid]::NewGuid().ToString("N"))
+$tempPycache = Join-Path ([System.IO.Path]::GetTempPath()) ("newser_pycache_{0}" -f [guid]::NewGuid().ToString("N"))
 
 $oldPythonPath = $env:PYTHONPATH
 $oldDatabaseUrl = $env:DATABASE_URL
 $oldGeminiKey = $env:GEMINI_API_KEY
 $oldGithubToken = $env:GITHUB_TOKEN
 $oldDontWriteBytecode = $env:PYTHONDONTWRITEBYTECODE
+$oldPycachePrefix = $env:PYTHONPYCACHEPREFIX
 
 try {
     Set-Location $repoRoot
@@ -30,19 +32,25 @@ try {
     $env:GEMINI_API_KEY = ""
     $env:GITHUB_TOKEN = ""
     $env:PYTHONDONTWRITEBYTECODE = "1"
+    $env:PYTHONPYCACHEPREFIX = $tempPycache
 
     if (-not $SkipCompile) {
         $pythonFiles = @("web_app.py")
         $pythonFiles += Get-ChildItem -Path "src", "tests" -Filter "*.py" -File | ForEach-Object { $_.FullName }
         & python -m py_compile @pythonFiles
+        if ($LASTEXITCODE -ne 0) { throw "Python compilation failed." }
     }
 
     if (-not $SkipTests) {
-        & python -m unittest -v tests.test_web_app tests.test_hybrid_brief tests.test_media
+        & python -m unittest -v tests.test_auth tests.test_web_app tests.test_hybrid_brief tests.test_media
+        if ($LASTEXITCODE -ne 0) { throw "Python tests failed." }
     }
 } finally {
     if (Test-Path $tempDb) {
         Remove-Item -LiteralPath $tempDb -Force
+    }
+    if (Test-Path $tempPycache) {
+        Remove-Item -LiteralPath $tempPycache -Recurse -Force
     }
 
     $env:PYTHONPATH = $oldPythonPath
@@ -50,4 +58,5 @@ try {
     $env:GEMINI_API_KEY = $oldGeminiKey
     $env:GITHUB_TOKEN = $oldGithubToken
     $env:PYTHONDONTWRITEBYTECODE = $oldDontWriteBytecode
+    $env:PYTHONPYCACHEPREFIX = $oldPycachePrefix
 }
