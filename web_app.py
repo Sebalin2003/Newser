@@ -8,13 +8,15 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import FastAPI, Query
+from fastapi import Depends, FastAPI, Query
+from pydantic import BaseModel
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.requests import Request
 
 from src import web_services
+from src.auth import AuthenticatedUser, optional_user, require_user
 
 BASE_DIR = Path(__file__).resolve().parent
 REFRESH_JOB_ID = "feed_refresh"
@@ -30,6 +32,12 @@ SOURCE_LINKS = {
     "OpenAI Blog": "https://openai.com/news/",
     "Hugging Face Blog": "https://huggingface.co/blog",
 }
+
+
+class PreferenceUpdate(BaseModel):
+    language: str
+    theme: str
+    source_preferences: dict[str, str]
 
 
 def ensure_app_initialized() -> None:
@@ -109,12 +117,17 @@ def index(request: Request):
             "areas": web_services.area_options("es"),
             "min_date": minimum.isoformat(),
             "max_date": maximum.isoformat(),
+            "auth_config": {
+                "url": os.getenv("SUPABASE_URL", "").strip(),
+                "publishableKey": os.getenv("SUPABASE_PUBLISHABLE_KEY", "").strip(),
+            },
         },
     )
 
 
 @app.get("/api/feed")
 def api_feed(
+    user: Annotated[AuthenticatedUser | None, Depends(optional_user)],
     fecha: str | None = None,
     fuentes: Annotated[list[str] | None, Query()] = None,
     prioritized_fuentes: Annotated[list[str] | None, Query()] = None,
@@ -131,7 +144,34 @@ def api_feed(
         orden=orden,
         q=q,
         lang=lang,
+        user_id=user.id if user else None,
     )
+
+
+@app.get("/api/me")
+def api_me(user: Annotated[AuthenticatedUser, Depends(require_user)]):
+    return {"id": user.id, "email": user.email, "name": user.name}
+
+
+@app.get("/api/preferences")
+def api_preferences(user: Annotated[AuthenticatedUser, Depends(require_user)]):
+    return web_services.get_preferences(user.id)
+
+
+@app.put("/api/preferences")
+def api_update_preferences(
+    payload: PreferenceUpdate,
+    user: Annotated[AuthenticatedUser, Depends(require_user)],
+):
+    try:
+        return web_services.update_preferences(
+            user.id,
+            language=payload.language,
+            theme=payload.theme,
+            source_preferences=payload.source_preferences,
+        )
+    except ValueError as exc:
+        return JSONResponse({"reason": str(exc)}, status_code=400)
 
 
 @app.get("/api/brief")
@@ -145,8 +185,11 @@ def api_daily_briefs(lang: str = "es"):
 
 
 @app.get("/api/favorites")
-def api_favorites(lang: str = "es"):
-    return web_services.get_favorites(lang=lang)
+def api_favorites(
+    user: Annotated[AuthenticatedUser, Depends(require_user)],
+    lang: str = "es",
+):
+    return web_services.get_favorites(user.id, lang=lang)
 
 
 @app.get("/api/stats")
@@ -217,22 +260,34 @@ def api_search_suggestions(
 
 
 @app.post("/api/articles/{article_id}/summary")
-def api_generate_summary(article_id: str, lang: str = "es"):
-    result = web_services.generate_summary(article_id, lang=lang)
+def api_generate_summary(
+    article_id: str,
+    user: Annotated[AuthenticatedUser, Depends(require_user)],
+    lang: str = "es",
+):
+    result = web_services.generate_summary(article_id, user.id, lang=lang)
     status_code = 200 if result.get("ok") else 400
     return JSONResponse(result, status_code=status_code)
 
 
 @app.post("/api/articles/{article_id}/favorite")
-def api_mark_favorite(article_id: str, lang: str = "es"):
-    result = web_services.mark_favorite(article_id, lang=lang)
+def api_mark_favorite(
+    article_id: str,
+    user: Annotated[AuthenticatedUser, Depends(require_user)],
+    lang: str = "es",
+):
+    result = web_services.mark_favorite(article_id, user.id, lang=lang)
     status_code = 200 if result.get("ok") else 404
     return JSONResponse(result, status_code=status_code)
 
 
 @app.delete("/api/articles/{article_id}/favorite")
-def api_remove_favorite(article_id: str, lang: str = "es"):
-    result = web_services.remove_favorite(article_id, lang=lang)
+def api_remove_favorite(
+    article_id: str,
+    user: Annotated[AuthenticatedUser, Depends(require_user)],
+    lang: str = "es",
+):
+    result = web_services.remove_favorite(article_id, user.id, lang=lang)
     status_code = 200 if result.get("ok") else 404
     return JSONResponse(result, status_code=status_code)
 

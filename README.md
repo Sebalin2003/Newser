@@ -46,6 +46,19 @@ powershell -ExecutionPolicy Bypass -File scripts/verify_runtime_health.ps1 -Base
 
 `/api/health` returns HTTP `200` only when the app can reach the configured database, the scheduler is running, the feed refresh job exists, the daily brief job exists, and the scheduler has no recorded `last_error`. It returns HTTP `503` when any readiness check fails.
 
+## Google and GitHub login
+
+Newser uses Supabase Auth for social login and validates Supabase access tokens in FastAPI. Add these public values to `.env`:
+
+```powershell
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_PUBLISHABLE_KEY=your-publishable-key
+```
+
+In Supabase Authentication, enable Google and GitHub and configure each provider with its client ID and client secret. Use the callback URL shown by Supabase (`https://<project-ref>.supabase.co/auth/v1/callback`) in the Google OAuth client and GitHub OAuth App. Add both the local app URL and production app URL to Supabase's redirect allow list.
+
+FastAPI validates tokens from `<SUPABASE_URL>/auth/v1/.well-known/jwks.json`, so the project must use asymmetric JWT signing keys. Google and GitHub secrets stay in the provider and Supabase dashboards; Newser never receives or stores provider access tokens.
+
 ## Supabase migration
 
 The code falls back to local SQLite at `news_analyzer.db` only when `DATABASE_URL` is not set. To move local SQLite data to Supabase on the free plan:

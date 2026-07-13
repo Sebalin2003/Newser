@@ -18,7 +18,10 @@ from dotenv import load_dotenv
 from sqlalchemy import and_, func, or_, text
 from sqlalchemy.orm import load_only
 
-from src.database import MacroResumen, Noticia, get_session, init_db, limpiar_datos_antiguos
+from src.database import (
+    MacroResumen, Noticia, UserArticleSummary, UserPreference, UserSavedItem,
+    get_session, init_db, limpiar_datos_antiguos,
+)
 from src.media import fetch_media_preview
 
 try:
@@ -43,7 +46,6 @@ HOT_TOPIC_MODEL_ANCHORED_SIMILARITY_THRESHOLD = 0.62
 SOURCE_PRIORITY_SORT_BOOST = 4.0
 FEED_QUERY_LIMIT = 220
 HOT_TOPIC_QUERY_LIMIT = 250
-MIN_FEED_SCORE = 50.0
 HOT_TOPIC_MODEL_PATTERN = re.compile(
     r"\b(?:gpt|claude|gemini|llama|mistral|qwen|deepseek|grok|o)\s*[-\u2010-\u2015\u2212]?\s*\d+(?:\.\d+)*\b",
     re.IGNORECASE,
@@ -61,7 +63,7 @@ _daily_brief_state: dict[str, Any] = {
     "last_error": None,
 }
 _summary_locks_guard = threading.Lock()
-_summary_locks: dict[tuple[str, str], threading.Lock] = {}
+_summary_locks: dict[tuple[str, str, str], threading.Lock] = {}
 
 SOURCES = [
     "GitHub Trending",
@@ -305,13 +307,20 @@ def _effective_datetime(item: dict[str, Any]) -> datetime | None:
     return parsed.astimezone(timezone.utc)
 
 
-def _serialize_article(n: Noticia, config: dict[str, Any], lang: str | None = None) -> dict[str, Any]:
+def _serialize_article(
+    n: Noticia,
+    config: dict[str, Any],
+    lang: str | None = None,
+    *,
+    is_favorite: bool = False,
+    favorited_at: datetime | None = None,
+    summary: str = "",
+) -> dict[str, Any]:
     selected_lang = normalize_language(lang)
     score = _score_display_fields(n, config)
     tags = parse_tags(score["tags_json"])
     title = str(n.titulo or "")
     label = re.sub(r"^\[\w+\]\s*", "", title).split("(+")[0].strip()[:80]
-    summary = str(n.resumen_ia_en or "") if selected_lang == "en" else str(n.resumen_ia or "")
     return {
         "id": str(n.id or ""),
         "titulo": title,
@@ -325,15 +334,15 @@ def _serialize_article(n: Noticia, config: dict[str, Any], lang: str | None = No
         "fecha_publicacion": _iso(n.fecha_publicacion),
         "fecha_ingesta": _iso(n.fecha_ingesta),
         "descripcion": str(n.descripcion_original or ""),
-        "resumen_ia": summary,
+        "resumen_ia": str(summary or ""),
         "selected_score": float(score["selected_score"] or 0),
         "tags": tags,
         "comments": int(n.num_comentarios or 0),
         "ranking": n.ranking,
         "metric": _metric_from_title(title, str(n.fuente or "")),
         "selection_reason": score["selection_reason"] if selected_lang == "es" else "",
-        "is_favorite": bool(n.is_favorite),
-        "favorited_at": _iso(n.favorited_at),
+        "is_favorite": is_favorite,
+        "favorited_at": _iso(favorited_at),
         "media_url": str(n.media_url or ""),
         "media_type": str(n.media_type or ""),
         "media_source_url": str(n.media_source_url or ""),
@@ -453,6 +462,7 @@ def get_feed(
     q: str | None = None,
     limit: int = 80,
     lang: str | None = None,
+    user_id: str | None = None,
 ) -> dict[str, Any]:
     selected_lang = normalize_language(lang)
     config = load_config()
@@ -466,16 +476,15 @@ def get_feed(
     article_columns = (
         Noticia.id, Noticia.titulo, Noticia.url, Noticia.discussion_url, Noticia.fuente,
         Noticia.fecha_publicacion, Noticia.fecha_ingesta, Noticia.descripcion_original,
-        Noticia.resumen_ia, Noticia.resumen_ia_en, Noticia.area_matcheada,
+        Noticia.area_matcheada,
         Noticia.ranking, Noticia.num_comentarios, Noticia.score, Noticia.selected_score,
         Noticia.tags_json, Noticia.selection_reason, Noticia.score_version,
-        Noticia.is_favorite, Noticia.favorited_at, Noticia.media_url, Noticia.media_type,
+        Noticia.media_url, Noticia.media_type,
         Noticia.media_source_url,
     )
 
     with get_session() as session:
         query = session.query(Noticia).filter(Noticia.fecha_ingesta >= cutoff)
-        query = query.filter(or_(Noticia.selected_score >= MIN_FEED_SCORE, Noticia.selected_score.is_(None)))
         if selected_date is not None:
             query = query.filter(_date_condition(selected_date))
         if query_text:
@@ -508,8 +517,36 @@ def get_feed(
         else:
             row_limit = max(FEED_QUERY_LIMIT, limit)
             rows = query.options(load_only(*article_columns)).limit(row_limit).all()
-        items = [_serialize_article(row, config, selected_lang) for row in rows]
-    items = [item for item in items if float(item.get("selected_score") or 0) >= MIN_FEED_SCORE]
+        saved_by_id: dict[str, UserSavedItem] = {}
+        summaries_by_id: dict[str, str] = {}
+        if user_id and rows:
+            row_ids = [row.id for row in rows]
+            saved_by_id = {
+                saved.article_id: saved
+                for saved in session.query(UserSavedItem).filter(
+                    UserSavedItem.user_id == user_id,
+                    UserSavedItem.article_id.in_(row_ids),
+                )
+            }
+            summaries_by_id = {
+                item.article_id: item.summary
+                for item in session.query(UserArticleSummary).filter(
+                    UserArticleSummary.user_id == user_id,
+                    UserArticleSummary.language == selected_lang,
+                    UserArticleSummary.article_id.in_(row_ids),
+                )
+            }
+        items = [
+            _serialize_article(
+                row,
+                config,
+                selected_lang,
+                is_favorite=row.id in saved_by_id,
+                favorited_at=saved_by_id[row.id].saved_at if row.id in saved_by_id else None,
+                summary=summaries_by_id.get(row.id, ""),
+            )
+            for row in rows
+        ]
     for item in items:
         item["source_preference"] = "prioritized" if item.get("fuente") in prioritized_sources else "normal"
     if selected_date is not None:
@@ -669,45 +706,63 @@ def get_past_daily_briefs(today: date | None = None, lang: str | None = None) ->
     return {"items": items}
 
 
-def get_favorites(lang: str | None = None) -> dict[str, Any]:
+def get_favorites(user_id: str, lang: str | None = None) -> dict[str, Any]:
     selected_lang = normalize_language(lang)
     config = load_config()
     with get_session() as session:
         rows = (
-            session.query(Noticia)
-            .filter(Noticia.is_favorite == 1)
-            .order_by(Noticia.favorited_at.desc(), Noticia.fecha_ingesta.desc())
+            session.query(Noticia, UserSavedItem)
+            .join(UserSavedItem, UserSavedItem.article_id == Noticia.id)
+            .filter(UserSavedItem.user_id == user_id)
+            .order_by(UserSavedItem.saved_at.desc(), Noticia.fecha_ingesta.desc())
             .all()
         )
-        items = [_serialize_article(row, config, selected_lang) for row in rows]
+        article_ids = [article.id for article, _ in rows]
+        summaries = {
+            item.article_id: item.summary
+            for item in session.query(UserArticleSummary).filter(
+                UserArticleSummary.user_id == user_id,
+                UserArticleSummary.language == selected_lang,
+                UserArticleSummary.article_id.in_(article_ids),
+            )
+        } if article_ids else {}
+        items = [
+            _serialize_article(
+                article, config, selected_lang, is_favorite=True,
+                favorited_at=saved.saved_at, summary=summaries.get(article.id, ""),
+            )
+            for article, saved in rows
+        ]
     return {"items": items, "count": len(items)}
 
 
-def mark_favorite(article_id: str, lang: str | None = None) -> dict[str, Any]:
+def mark_favorite(article_id: str, user_id: str, lang: str | None = None) -> dict[str, Any]:
     selected_lang = normalize_language(lang)
     with get_session() as session:
         article = session.query(Noticia).filter(Noticia.id == article_id).first()
         if not article:
             return {"ok": False, "reason": t("article_not_found", selected_lang)}
-        if not article.is_favorite:
-            article.is_favorite = 1
-            article.favorited_at = datetime.now(timezone.utc)
+        saved = session.get(UserSavedItem, (user_id, article_id))
+        if saved is None:
+            saved = UserSavedItem(user_id=user_id, article_id=article_id, saved_at=datetime.now(timezone.utc))
+            session.add(saved)
         return {
             "ok": True,
             "id": str(article.id),
-            "is_favorite": bool(article.is_favorite),
-            "favorited_at": _iso(article.favorited_at),
+            "is_favorite": True,
+            "favorited_at": _iso(saved.saved_at),
         }
 
 
-def remove_favorite(article_id: str, lang: str | None = None) -> dict[str, Any]:
+def remove_favorite(article_id: str, user_id: str, lang: str | None = None) -> dict[str, Any]:
     selected_lang = normalize_language(lang)
     with get_session() as session:
         article = session.query(Noticia).filter(Noticia.id == article_id).first()
         if not article:
             return {"ok": False, "reason": t("article_not_found", selected_lang)}
-        article.is_favorite = 0
-        article.favorited_at = None
+        saved = session.get(UserSavedItem, (user_id, article_id))
+        if saved is not None:
+            session.delete(saved)
         return {"ok": True, "id": str(article.id), "is_favorite": False, "favorited_at": None}
 
 
@@ -772,7 +827,6 @@ def get_suggestions(
     with get_session() as session:
         query = session.query(Noticia).filter(
             Noticia.fecha_ingesta >= cutoff,
-            or_(Noticia.selected_score >= MIN_FEED_SCORE, Noticia.selected_score.is_(None)),
             _search_condition(session, query_text),
         )
         if selected_date is not None:
@@ -803,12 +857,11 @@ def get_suggestions(
 
     feed = [
         row for row in rows
-        if row["score"] >= MIN_FEED_SCORE
-        and (selected_date is None or _matches_date({
+        if selected_date is None or _matches_date({
             "fuente": row["source"],
             "fecha_publicacion": row["fecha_publicacion"],
             "fecha_ingesta": row["fecha_ingesta"],
-        }, selected_date))
+        }, selected_date)
     ][:5]
     return [
         {
@@ -822,14 +875,8 @@ def get_suggestions(
     ]
 
 
-def _cached_article_summary(article: Noticia, lang: str) -> str:
-    existing = article.resumen_ia_en if lang == "en" else article.resumen_ia
-    existing = str(existing or "").strip()
-    return existing if existing and existing != "Resumen no disponible" else ""
-
-
-def _get_summary_lock(article_id: str, lang: str) -> threading.Lock:
-    key = (article_id, lang)
+def _get_summary_lock(user_id: str, article_id: str, lang: str) -> threading.Lock:
+    key = (user_id, article_id, lang)
     with _summary_locks_guard:
         lock = _summary_locks.get(key)
         if lock is None:
@@ -838,30 +885,76 @@ def _get_summary_lock(article_id: str, lang: str) -> threading.Lock:
         return lock
 
 
-def generate_summary(article_id: str, lang: str | None = None) -> dict[str, Any]:
+def generate_summary(article_id: str, user_id: str, lang: str | None = None) -> dict[str, Any]:
     selected_lang = normalize_language(lang)
     with get_session() as session:
         article = session.query(Noticia).filter(Noticia.id == article_id).first()
         if not article:
             return {"ok": False, "reason": t("article_not_found", selected_lang)}
-        existing = _cached_article_summary(article, selected_lang)
+        existing = session.get(UserArticleSummary, (user_id, article_id, selected_lang))
         if existing:
-            return {"ok": True, "summary": existing, "cached": True}
+            return {"ok": True, "summary": existing.summary, "cached": True}
 
     if not os.getenv("GEMINI_API_KEY", "").strip():
         return {"ok": False, "reason": t("missing_key", selected_lang)}
     from src.processor import generar_resumen_individual
 
-    with _get_summary_lock(article_id, selected_lang):
+    with _get_summary_lock(user_id, article_id, selected_lang):
         with get_session() as session:
             article = session.query(Noticia).filter(Noticia.id == article_id).first()
             if not article:
                 return {"ok": False, "reason": t("article_not_found", selected_lang)}
-            existing = _cached_article_summary(article, selected_lang)
+            existing = session.get(UserArticleSummary, (user_id, article_id, selected_lang))
             if existing:
-                return {"ok": True, "summary": existing, "cached": True}
+                return {"ok": True, "summary": existing.summary, "cached": True}
             title = str(article.titulo or "")
-        return generar_resumen_individual(article_id, title, language=selected_lang)
+        result = generar_resumen_individual(article_id, title, language=selected_lang)
+        if result.get("ok") and result.get("summary"):
+            with get_session() as session:
+                session.add(UserArticleSummary(
+                    user_id=user_id,
+                    article_id=article_id,
+                    language=selected_lang,
+                    summary=str(result["summary"]),
+                    model=os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite"),
+                ))
+        return result
+
+
+def get_preferences(user_id: str) -> dict[str, Any]:
+    with get_session() as session:
+        row = session.get(UserPreference, user_id)
+        if row is None:
+            return {"language": "es", "theme": "dark", "source_preferences": {}}
+        try:
+            source_preferences = json.loads(row.source_preferences_json or "{}")
+        except (TypeError, ValueError):
+            source_preferences = {}
+        return {
+            "language": normalize_language(row.language),
+            "theme": "light" if row.theme == "light" else "dark",
+            "source_preferences": source_preferences,
+        }
+
+
+def update_preferences(
+    user_id: str, *, language: str, theme: str, source_preferences: dict[str, str],
+) -> dict[str, Any]:
+    if language not in {"es", "en"} or theme not in {"light", "dark"}:
+        raise ValueError("Invalid language or theme.")
+    if any(source not in SOURCES or value not in {"prioritized", "normal", "hidden"}
+           for source, value in source_preferences.items()):
+        raise ValueError("Invalid source preference.")
+    with get_session() as session:
+        row = session.get(UserPreference, user_id)
+        if row is None:
+            row = UserPreference(user_id=user_id)
+            session.add(row)
+        row.language = language
+        row.theme = theme
+        row.source_preferences_json = json.dumps(source_preferences)
+        row.updated_at = datetime.now(timezone.utc)
+    return get_preferences(user_id)
 
 
 def refresh_feed() -> dict[str, Any]:

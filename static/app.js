@@ -3,9 +3,11 @@ const state = {
   loading: false,
   pendingLoad: false,
   view: "today",
-  language: window.localStorage.getItem("newser.language") === "en" ? "en" : "es",
+  language: "es",
   sourcePreferences: {},
   appliedSourcePreferences: {},
+  session: null,
+  user: null,
 };
 const summaryRequests = new Map();
 let dailyBriefRequestId = 0;
@@ -13,6 +15,7 @@ let feedRequestId = 0;
 let feedAbortController = null;
 let suggestionRequestId = 0;
 let suggestionAbortController = null;
+let authDialogReturnFocus = null;
 
 const I18N = {
   es: {
@@ -39,23 +42,40 @@ const I18N = {
     "prefs.title": "Preferencias",
     "prefs.language": "Idioma",
     "prefs.appearance": "Apariencia",
+    "account.title": "Cuenta",
+    "account.login": "Iniciar sesi\u00f3n",
+    "account.google": "Continuar con Google",
+    "account.github": "Continuar con GitHub",
+    "account.logout": "Cerrar sesi\u00f3n",
+    "account.logoutConfirmTitle": "Cerrar sesi\u00f3n",
+    "account.logoutConfirmMessage": "Pod\u00e9s volver a iniciar sesi\u00f3n cuando quieras.",
+    "account.logoutConfirmAction": "Cerrar sesi\u00f3n",
+    "account.loading": "Redirigiendo...",
+    "account.required": "Inici\u00e1 sesi\u00f3n para usar esta funci\u00f3n.",
+    "account.unavailable": "El inicio de sesi\u00f3n no est\u00e1 configurado.",
+    "account.error": "No se pudo iniciar sesi\u00f3n.",
+    "account.noSession": "Google volvi\u00f3 sin una sesi\u00f3n activa. Volv\u00e9 a iniciar sesi\u00f3n.",
+    "account.externalCodeError": "Google no pudo completar el inicio de sesi\u00f3n. Revis\u00e1 el redirect URI, client ID y client secret en Supabase.",
+    "account.promptTitle": "Inici\u00e1 sesi\u00f3n para continuar",
+    "account.promptAction": "Iniciar sesi\u00f3n",
+    "account.cancel": "Cancelar",
     "theme.toLight": "Cambiar a modo claro",
     "theme.toDark": "Cambiar a modo oscuro",
     "theme.light": "Claro",
     "theme.dark": "Oscuro",
     "mobile.openFilters": "Abrir filtros y ajustes",
+    "mobile.closeFilters": "Cerrar filtros y ajustes",
     "mobile.navigation": "Navegación móvil",
     "mobile.updates": "Actualizaciones",
     "mobile.briefs": "Briefs",
-    "mobile.saved": "Guardados",
+    "mobile.saved": "Favoritos",
     "mobile.more": "Más",
+    "mobile.earlier": "Anteriores",
+    "mobile.previousDays": "Días anteriores",
     "search.placeholder": "Buscar",
     "search.clear": "Limpiar búsqueda",
     "search.results": "Resultados de búsqueda",
     "status.loadingSearch": "Cargando resultados de búsqueda...",
-    "status.loadingDashboard": "Cargando panel...",
-    "status.loadingBriefs": "Cargando briefs diarios...",
-    "status.loadingFavorites": "Cargando favoritos...",
     "status.loadingSources": "Cargando preferencias de fuentes...",
     "status.sourcesApplied": "Preferencias aplicadas a los filtros.",
     "status.sourcesReset": "Preferencias de fuentes restablecidas.",
@@ -63,9 +83,10 @@ const I18N = {
     "date.today": "Hoy",
     "date.all": "Todas las fechas",
     "brief.executive": "Resumen ejecutivo",
+    "brief.daily": "Brief diario",
     "brief.schedule": "El brief diario se genera todos los días a las 8:00.",
     "brief.loading": "Cargando brief...",
-    "brief.archive": "Archivo",
+    "brief.history": "Historial",
     "brief.previous": "Briefs diarios anteriores",
     "brief.generating": "El brief de hoy se está generando. Actualizá esta sección en un momento.",
     "brief.missing": "Todavía no hay brief diario disponible para esta fecha.",
@@ -125,6 +146,7 @@ const I18N = {
     "stats.globalItems": "Items globales",
     "media.preview": "Vista previa de imagen",
     "media.close": "Cerrar vista previa",
+    "common.close": "Cerrar",
     "area.ai_agents": "IA y agentes",
     "area.developer_tools": "Herramientas dev",
     "area.cybersecurity": "Ciberseguridad",
@@ -155,23 +177,40 @@ const I18N = {
     "prefs.title": "Preferences",
     "prefs.language": "Language",
     "prefs.appearance": "Appearance",
+    "account.title": "Account",
+    "account.login": "Log in",
+    "account.google": "Continue with Google",
+    "account.github": "Continue with GitHub",
+    "account.logout": "Log out",
+    "account.logoutConfirmTitle": "Log out",
+    "account.logoutConfirmMessage": "You can sign back in whenever you need.",
+    "account.logoutConfirmAction": "Log out",
+    "account.loading": "Redirecting...",
+    "account.required": "Log in to use this feature.",
+    "account.unavailable": "Login is not configured.",
+    "account.error": "Login could not be completed.",
+    "account.noSession": "Google returned without an active session. Please sign in again.",
+    "account.externalCodeError": "Google sign-in could not be completed. Check the redirect URI, client ID, and client secret in Supabase.",
+    "account.promptTitle": "Sign in to continue",
+    "account.promptAction": "Sign in",
+    "account.cancel": "Cancel",
     "theme.toLight": "Switch to light mode",
     "theme.toDark": "Switch to dark mode",
     "theme.light": "Light",
     "theme.dark": "Dark",
     "mobile.openFilters": "Open filters and settings",
+    "mobile.closeFilters": "Close filters and settings",
     "mobile.navigation": "Mobile navigation",
     "mobile.updates": "Updates",
     "mobile.briefs": "Briefs",
     "mobile.saved": "Saved",
     "mobile.more": "More",
+    "mobile.earlier": "Earlier",
+    "mobile.previousDays": "Previous Days",
     "search.placeholder": "Search",
     "search.clear": "Clear search",
     "search.results": "Search results",
     "status.loadingSearch": "Loading search results...",
-    "status.loadingDashboard": "Loading dashboard...",
-    "status.loadingBriefs": "Loading daily briefs...",
-    "status.loadingFavorites": "Loading favorites...",
     "status.loadingSources": "Loading source preferences...",
     "status.sourcesApplied": "Source preferences applied to filters.",
     "status.sourcesReset": "Source preferences reset.",
@@ -179,9 +218,10 @@ const I18N = {
     "date.today": "Today",
     "date.all": "All dates",
     "brief.executive": "Executive summary",
+    "brief.daily": "Daily brief",
     "brief.schedule": "The daily brief is generated every day at 8:00.",
     "brief.loading": "Loading brief...",
-    "brief.archive": "Archive",
+    "brief.history": "History",
     "brief.previous": "Previous daily briefs",
     "brief.generating": "Today's brief is being generated. Refresh this section in a moment.",
     "brief.missing": "No daily brief is available for this date yet.",
@@ -241,6 +281,7 @@ const I18N = {
     "stats.globalItems": "Global items",
     "media.preview": "Image preview",
     "media.close": "Close image preview",
+    "common.close": "Close",
     "area.ai_agents": "AI & Agents",
     "area.developer_tools": "Developer Tools",
     "area.cybersecurity": "Cybersecurity",
@@ -264,7 +305,9 @@ const feedMeta = document.querySelector("#feed-meta");
 const topbarTitle = document.querySelector(".topbar h2");
 const topbarTitleMain = document.querySelector("#topbar-title-main");
 const topbarDate = document.querySelector("#topbar-date");
+const dateInput = filters.querySelector('input[name="fecha"]');
 const allDatesToggle = document.querySelector("[data-all-dates]");
+const mobileHistoryPanel = document.querySelector("[data-mobile-history-panel]");
 const stats = document.querySelector("#stats");
 const brief = document.querySelector("#brief");
 const hotTopics = document.querySelector("#hot-topics");
@@ -274,7 +317,9 @@ const suggestions = document.querySelector("#suggestions");
 const clearSearch = document.querySelector("#clear-search");
 const overviewSections = document.querySelectorAll(".overview-only");
 const dailyBriefs = document.querySelector("#daily-briefs");
+const briefMobileHistory = document.querySelector("#brief-mobile-history");
 const dailyBriefsList = document.querySelector("#daily-briefs-list");
+const dailyBriefArchiveCount = document.querySelector("#brief-archive-count");
 const favorites = document.querySelector("#favorites");
 const favoritesFeed = document.querySelector("#favorites-feed");
 const sourcePreferencesPanel = document.querySelector("#source-preferences");
@@ -283,7 +328,111 @@ const sourceActionButtons = document.querySelectorAll("[data-source-action]");
 const mediaModal = document.querySelector("#media-modal");
 const mediaModalImage = document.querySelector("#media-modal-image");
 const mediaModalClose = document.querySelector("#media-modal-close");
-const SOURCE_PREFERENCE_STORAGE_KEY = "newser.sourcePreferences";
+const authRequiredDialog = document.querySelector("#auth-required-dialog");
+const authRequiredClose = document.querySelector("#auth-required-close");
+const authRequiredMessage = document.querySelector("#auth-required-message");
+const logoutConfirmDialog = document.querySelector("#logout-confirm-dialog");
+const logoutConfirmClose = document.querySelector("#logout-confirm-close");
+const logoutConfirmAction = document.querySelector("#logout-confirm-action");
+const logoutConfirmCancel = document.querySelector("#logout-confirm-cancel");
+const accountPanels = document.querySelectorAll("[data-account-panel]");
+const accountToggles = document.querySelectorAll("[data-account-toggle]");
+const authProviderButtons = document.querySelectorAll("[data-auth-provider]");
+const authLogoutButtons = document.querySelectorAll("[data-auth-logout]");
+const authConfig = window.NEWSER_AUTH_CONFIG || {};
+const authStorageKey = (() => {
+  try {
+    return `newser-auth-${new URL(authConfig.url || "").hostname.split(".")[0]}`;
+  } catch (_error) {
+    return "newser-auth";
+  }
+})();
+
+function availableWebStorage(name) {
+  try {
+    const storage = window[name];
+    if (!storage) return null;
+    const key = `${authStorageKey}-test`;
+    storage.setItem(key, "1");
+    storage.removeItem(key);
+    return storage;
+  } catch (_error) {
+    return null;
+  }
+}
+
+function cookieMap() {
+  return document.cookie
+    .split(";")
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .reduce((items, part) => {
+      const separator = part.indexOf("=");
+      if (separator < 0) return items;
+      items[decodeURIComponent(part.slice(0, separator))] = decodeURIComponent(part.slice(separator + 1));
+      return items;
+    }, {});
+}
+
+function setCookie(name, value, maxAgeSeconds) {
+  document.cookie = `${encodeURIComponent(name)}=${encodeURIComponent(value)}; path=/; max-age=${maxAgeSeconds}; SameSite=Lax`;
+}
+
+function cookieStorage() {
+  const chunkSize = 3000;
+  return {
+    getItem(key) {
+      const cookies = cookieMap();
+      const chunkCountKey = `${key}-chunks`;
+      const chunks = Number(cookies[chunkCountKey] || "0");
+      if (!chunks) return cookies[key] || null;
+      let value = "";
+      for (let index = 0; index < chunks; index += 1) {
+        value += cookies[`${key}-${index}`] || "";
+      }
+      return value || null;
+    },
+    setItem(key, value) {
+      this.removeItem(key);
+      const chunkCountKey = `${key}-chunks`;
+      const text = String(value || "");
+      const chunks = Math.max(1, Math.ceil(text.length / chunkSize));
+      setCookie(chunkCountKey, String(chunks), 60 * 60 * 24 * 30);
+      for (let index = 0; index < chunks; index += 1) {
+        setCookie(`${key}-${index}`, text.slice(index * chunkSize, (index + 1) * chunkSize), 60 * 60 * 24 * 30);
+      }
+    },
+    removeItem(key) {
+      const cookies = cookieMap();
+      const chunkCountKey = `${key}-chunks`;
+      const chunks = Math.max(Number(cookies[chunkCountKey] || "0"), 1);
+      for (let index = 0; index < chunks; index += 1) {
+        setCookie(`${key}-${index}`, "", 0);
+      }
+      setCookie(key, "", 0);
+      setCookie(chunkCountKey, "", 0);
+    },
+  };
+}
+
+function authStorage() {
+  const storage = availableWebStorage("localStorage") || availableWebStorage("sessionStorage");
+  if (storage) return storage;
+  return cookieStorage();
+}
+
+const authClient = authConfig.url && authConfig.publishableKey && window.supabase
+  ? window.supabase.createClient(authConfig.url, authConfig.publishableKey, {
+      auth: {
+        autoRefreshToken: true,
+        detectSessionInUrl: false,
+        flowType: "pkce",
+        persistSession: true,
+        storage: authStorage(),
+        storageKey: authStorageKey,
+      },
+    })
+  : null;
 const SOURCE_PREFERENCE_VALUES = new Set(["prioritized", "normal", "hidden"]);
 
 function i18n(key) {
@@ -297,6 +446,34 @@ function locale() {
 function withLanguage(url) {
   const separator = url.includes("?") ? "&" : "?";
   return `${url}${separator}lang=${encodeURIComponent(state.language)}`;
+}
+
+function parseFilterDate(value) {
+  const parts = String(value || "").split("-").map((part) => Number.parseInt(part, 10));
+  if (parts.length !== 3 || parts.some(Number.isNaN)) return null;
+  return new Date(parts[0], parts[1] - 1, parts[2]);
+}
+
+function formatFilterDate(date) {
+  if (!(date instanceof Date) || Number.isNaN(date.getTime())) return "";
+  return [
+    date.getFullYear(),
+    String(date.getMonth() + 1).padStart(2, "0"),
+    String(date.getDate()).padStart(2, "0"),
+  ].join("-");
+}
+
+function shiftFilterDate(value, offsetDays) {
+  const date = parseFilterDate(value);
+  if (!date) return "";
+  date.setDate(date.getDate() + offsetDays);
+  return formatFilterDate(date);
+}
+
+function formatMobileHistoryDate(value) {
+  const date = parseFilterDate(value);
+  if (!date) return "";
+  return date.toLocaleDateString(locale(), { month: "numeric", day: "2-digit" });
 }
 
 function applyTranslations() {
@@ -324,20 +501,347 @@ function applyTranslations() {
   syncDateMode();
   updateMultiSelectLabels();
   updateTopbarTitle();
+  renderMobileHistoryPanel();
+  syncMobileMenuToggleState();
+  renderAccount();
 }
 
-function setLanguage(language) {
+function setLanguage(language, persist = true) {
   const nextLanguage = language === "en" ? "en" : "es";
   if (state.language === nextLanguage) return;
   state.language = nextLanguage;
-  window.localStorage.setItem("newser.language", nextLanguage);
   applyTranslations();
+  if (persist) savePreferences();
   loadAll();
 }
 
 function setStatus(message, isError = false) {
   statusLine.textContent = message || "";
   statusLine.classList.toggle("error", isError);
+}
+
+function setAuthRequiredMessage(message, isError = false) {
+  if (!authRequiredMessage) return;
+  authRequiredMessage.textContent = message || "";
+  authRequiredMessage.hidden = !message;
+  authRequiredMessage.classList.toggle("error", isError);
+}
+
+function accountDisplayName() {
+  return state.user?.name || state.user?.email || i18n("account.login");
+}
+
+function userFromSession(session) {
+  const user = session?.user;
+  if (!user) return null;
+  const metadata = user.user_metadata || {};
+  const email = user.email || "";
+  return {
+    id: user.id,
+    email,
+    name: metadata.full_name || metadata.name || email,
+  };
+}
+
+function renderAccount() {
+  accountPanels.forEach((panel) => {
+    const label = panel.querySelector("[data-account-label]");
+    const providerButtons = panel.querySelectorAll("[data-auth-provider]");
+    const logout = panel.querySelector("[data-auth-logout]");
+    if (label) {
+      label.removeAttribute("data-i18n");
+      label.textContent = accountDisplayName();
+      label.title = state.user ? accountDisplayName() : "";
+    }
+    providerButtons.forEach((button) => { button.hidden = Boolean(state.user); });
+    if (logout) logout.hidden = !state.user;
+    panel.classList.toggle("is-authenticated", Boolean(state.user));
+  });
+}
+
+function setAccountExpanded(panel, expanded) {
+  const toggle = panel?.querySelector("[data-account-toggle]");
+  const actions = panel?.querySelector("[data-account-actions]");
+  if (!toggle || !actions) return;
+  toggle.setAttribute("aria-expanded", String(expanded));
+  actions.hidden = !expanded;
+  panel.classList.toggle("is-expanded", expanded);
+  if (expanded) panel.scrollIntoView({ block: "nearest" });
+}
+
+function visibleAccountPanel() {
+  if (isPhoneViewport()) return document.querySelector(".account-mobile-card");
+  return document.querySelector(".sidebar .account-section");
+}
+
+function requireLogin() {
+  if (state.user) return true;
+  if (isPhoneViewport()) setViewMode("more");
+  const panel = visibleAccountPanel();
+  if (document.body.classList.contains("sidebar-collapsed") && !isPhoneViewport()) {
+    setSidebarCollapsed(false);
+  }
+  setAccountExpanded(panel, true);
+  setStatus(i18n("account.required"));
+  panel?.querySelector("[data-auth-provider]")?.focus();
+  return false;
+}
+
+async function ensureUser(trigger) {
+  if (state.user) return true;
+  showAuthRequiredDialog(trigger);
+  const session = await currentSupabaseSession();
+  if (session) {
+    await hydrateAuthenticatedUser(session);
+    return Boolean(state.user);
+  }
+  return false;
+}
+
+async function savePreferences() {
+  if (!state.user) return;
+  try {
+    await fetchJson("/api/preferences", {
+      method: "PUT",
+      body: JSON.stringify({
+        language: state.language,
+        theme: document.documentElement.dataset.theme === "light" ? "light" : "dark",
+        source_preferences: state.sourcePreferences,
+      }),
+    });
+  } catch (error) {
+    setStatus(error.message, true);
+  }
+}
+
+function applyAuthenticatedPreferences(preferences) {
+  const defaults = defaultSourcePreferences();
+  Object.entries(preferences.source_preferences || {}).forEach(([source, value]) => {
+    if (source in defaults && SOURCE_PREFERENCE_VALUES.has(value)) defaults[source] = value;
+  });
+  state.sourcePreferences = defaults;
+  state.appliedSourcePreferences = { ...defaults };
+  setTheme(preferences.theme === "light" ? "light" : "dark");
+  setLanguage(preferences.language === "en" ? "en" : "es", false);
+  renderSourcePreferenceControls();
+  syncSourceFilterVisibility();
+}
+
+async function hydrateAuthenticatedUser(session) {
+  state.session = session || null;
+  if (!session) {
+    state.user = null;
+    state.language = "es";
+    state.sourcePreferences = defaultSourcePreferences();
+    state.appliedSourcePreferences = { ...state.sourcePreferences };
+    setTheme("dark");
+    applyTranslations();
+    renderSourcePreferenceControls();
+    syncSourceFilterVisibility();
+    renderAccount();
+    return;
+  }
+  state.user = userFromSession(session);
+  renderAccount();
+  closeAuthRequiredDialog(false);
+  try {
+    const [user, preferences] = await Promise.all([fetchJson("/api/me"), fetchJson("/api/preferences")]);
+    state.user = user;
+    applyAuthenticatedPreferences(preferences);
+    renderAccount();
+  } catch (error) {
+    renderAccount();
+    setStatus(error.message, true);
+  }
+}
+
+async function beginOAuth(provider, button) {
+  if (!authClient) {
+    setStatus(i18n("account.unavailable"), true);
+    button.focus();
+    return;
+  }
+  setAuthRequiredMessage("");
+  authProviderButtons.forEach((item) => { item.disabled = true; });
+  const label = button.querySelector("[data-i18n]");
+  const original = label?.textContent || button.textContent;
+  if (label) {
+    label.textContent = i18n("account.loading");
+  } else {
+    button.textContent = i18n("account.loading");
+  }
+  const { error } = await authClient.auth.signInWithOAuth({
+    provider,
+    options: { redirectTo: `${window.location.origin}${window.location.pathname}` },
+  });
+  if (error) {
+    authProviderButtons.forEach((item) => { item.disabled = false; });
+    if (label) {
+      label.textContent = original;
+    } else {
+      button.textContent = original;
+    }
+    setStatus(authErrorMessage(error), true);
+    button.focus();
+  }
+}
+
+function cleanOAuthUrl() {
+  const url = new URL(window.location.href);
+  ["code", "error", "error_code", "error_description"].forEach((key) => {
+    url.searchParams.delete(key);
+  });
+  url.hash = "";
+  const next = `${url.pathname}${url.search}${url.hash}`;
+  window.history.replaceState({}, "", next || window.location.pathname);
+}
+
+async function sessionFromOAuthRedirect() {
+  if (!authClient) return null;
+  const hashParams = new URLSearchParams(window.location.hash.startsWith("#") ? window.location.hash.slice(1) : "");
+  const accessToken = hashParams.get("access_token");
+  const refreshToken = hashParams.get("refresh_token");
+  if (accessToken && refreshToken) {
+    const { data, error } = await authClient.auth.setSession({
+      access_token: accessToken,
+      refresh_token: refreshToken,
+    });
+    if (error) throw error;
+    cleanOAuthUrl();
+    return data.session;
+  }
+
+  const code = new URLSearchParams(window.location.search).get("code");
+  if (code) {
+    const { data, error } = await authClient.auth.exchangeCodeForSession(code);
+    if (error) throw error;
+    cleanOAuthUrl();
+    return data.session;
+  }
+  return null;
+}
+
+function hasOAuthReturnParams() {
+  const searchParams = new URLSearchParams(window.location.search);
+  const hashParams = new URLSearchParams(window.location.hash.startsWith("#") ? window.location.hash.slice(1) : "");
+  return Boolean(
+    searchParams.get("code")
+    || searchParams.get("error")
+    || searchParams.get("error_description")
+    || hashParams.get("access_token")
+    || hashParams.get("error")
+    || hashParams.get("error_description")
+  );
+}
+
+function oauthReturnSnapshot() {
+  const searchParams = new URLSearchParams(window.location.search);
+  const hashParams = new URLSearchParams(window.location.hash.startsWith("#") ? window.location.hash.slice(1) : "");
+  let storedSession = false;
+  try {
+    for (let index = 0; index < window.localStorage.length; index += 1) {
+      const key = window.localStorage.key(index) || "";
+      if (key.startsWith("sb-") && key.includes("auth-token")) {
+        storedSession = true;
+        break;
+      }
+    }
+  } catch (_error) {
+    storedSession = false;
+  }
+  return {
+    code: Boolean(searchParams.get("code")),
+    token: Boolean(hashParams.get("access_token")),
+    storedSession,
+  };
+}
+
+function authReturnDiagnostic(message) {
+  const snapshot = oauthReturnSnapshot();
+  const yes = state.language === "en" ? "yes" : "si";
+  const no = "no";
+  const labels = state.language === "en"
+    ? ["code", "token", "stored session"]
+    : ["codigo", "token", "sesion guardada"];
+  const values = [snapshot.code, snapshot.token, snapshot.storedSession].map((value) => (value ? yes : no));
+  return `${message} (${labels[0]}: ${values[0]}, ${labels[1]}: ${values[1]}, ${labels[2]}: ${values[2]})`;
+}
+
+function authErrorMessage(error) {
+  const message = String(error?.message || error || "");
+  if (message.toLowerCase().includes("unable to exchange external code")) {
+    return i18n("account.externalCodeError");
+  }
+  return message || i18n("account.error");
+}
+
+async function currentSupabaseSession() {
+  if (!authClient) return null;
+  const { data } = await authClient.auth.getSession();
+  return data.session || null;
+}
+
+async function waitForSupabaseSession(attempts = 10) {
+  if (!authClient) return null;
+  for (let index = 0; index < attempts; index += 1) {
+    const session = await currentSupabaseSession();
+    if (session) return session;
+    await new Promise((resolve) => window.setTimeout(resolve, 250));
+  }
+  return null;
+}
+
+async function initAuth() {
+  accountToggles.forEach((toggle) => toggle.addEventListener("click", () => {
+    const panel = toggle.closest("[data-account-panel]");
+    if (document.body.classList.contains("sidebar-collapsed") && !isPhoneViewport()) {
+      setSidebarCollapsed(false);
+    }
+    setAccountExpanded(panel, toggle.getAttribute("aria-expanded") !== "true");
+  }));
+  authProviderButtons.forEach((button) => button.addEventListener("click", () => {
+    beginOAuth(button.dataset.authProvider, button);
+  }));
+  authLogoutButtons.forEach((button) => button.addEventListener("click", () => {
+    showLogoutConfirmDialog(button);
+  }));
+
+  const oauthError = new URLSearchParams(window.location.search).get("error_description");
+  if (oauthError) {
+    setStatus(oauthError || i18n("account.error"), true);
+    window.history.replaceState({}, "", window.location.pathname);
+  }
+  if (!authClient) {
+    renderAccount();
+    return;
+  }
+  const hadOAuthReturn = hasOAuthReturnParams();
+  try {
+    const redirectSession = await sessionFromOAuthRedirect();
+    const session = redirectSession || await waitForSupabaseSession(16);
+    await hydrateAuthenticatedUser(session);
+    if (hadOAuthReturn && !session) {
+      const message = authReturnDiagnostic(i18n("account.noSession"));
+      setStatus(message, true);
+      showAuthRequiredDialog(null, message, true);
+    }
+  } catch (error) {
+    const session = await waitForSupabaseSession(16);
+    await hydrateAuthenticatedUser(session);
+    if (!session) {
+      const message = hadOAuthReturn
+        ? authReturnDiagnostic(authErrorMessage(error))
+        : authErrorMessage(error);
+      setStatus(message, true);
+      if (hadOAuthReturn) showAuthRequiredDialog(null, message, true);
+    }
+  }
+  authClient.auth.onAuthStateChange((_event, session) => {
+    window.setTimeout(async () => {
+      await hydrateAuthenticatedUser(session);
+      loadAll();
+    }, 0);
+  });
 }
 
 function sourceInputs() {
@@ -353,22 +857,11 @@ function defaultSourcePreferences() {
 }
 
 function loadSourcePreferences() {
-  const defaults = defaultSourcePreferences();
-  try {
-    const saved = JSON.parse(window.localStorage.getItem(SOURCE_PREFERENCE_STORAGE_KEY) || "{}");
-    Object.keys(defaults).forEach((source) => {
-      if (SOURCE_PREFERENCE_VALUES.has(saved[source])) {
-        defaults[source] = saved[source];
-      }
-    });
-  } catch {
-    // Keep defaults when localStorage contains invalid JSON.
-  }
-  return defaults;
+  return defaultSourcePreferences();
 }
 
 function saveSourcePreferences() {
-  window.localStorage.setItem(SOURCE_PREFERENCE_STORAGE_KEY, JSON.stringify(state.sourcePreferences));
+  savePreferences();
 }
 
 function renderSourcePreferenceControls() {
@@ -448,7 +941,8 @@ function initSourcePreferences() {
   renderSourcePreferenceControls();
   syncSourceFilterVisibility();
   sourcePreferenceButtons.forEach((button) => {
-    button.addEventListener("click", () => {
+    button.addEventListener("click", async () => {
+      if (!await ensureUser(button)) return;
       const source = button.dataset.sourcePreference || "";
       const value = button.dataset.sourceValue || "normal";
       if (!source || !SOURCE_PREFERENCE_VALUES.has(value)) return;
@@ -457,7 +951,8 @@ function initSourcePreferences() {
     });
   });
   sourceActionButtons.forEach((button) => {
-    button.addEventListener("click", () => {
+    button.addEventListener("click", async () => {
+      if (!await ensureUser(button)) return;
       if (button.dataset.sourceAction === "reset") {
         resetSourcePreferences();
         setStatus(i18n("status.sourcesReset"));
@@ -588,7 +1083,6 @@ function updateTopbarTitle() {
   }
 
   if (!topbarDate) return;
-  const dateInput = filters.querySelector('input[name="fecha"]');
   const allDates = Boolean(allDatesToggle?.checked);
   const selectedDate = dateInput?.value || "";
   const latestDate = dateInput?.max || "";
@@ -598,10 +1092,114 @@ function updateTopbarTitle() {
 }
 
 function syncDateMode() {
-  const dateInput = filters.querySelector('input[name="fecha"]');
   const allDates = Boolean(allDatesToggle?.checked);
   if (dateInput) dateInput.disabled = allDates;
   updateTopbarTitle();
+  updateMobileHistoryState();
+}
+
+function mobileHistoryDates() {
+  const latestDate = dateInput?.max || dateInput?.value || "";
+  return [
+    { key: "today", value: latestDate, label: i18n("date.today") },
+    { key: "previous-1", value: shiftFilterDate(latestDate, -1), label: formatMobileHistoryDate(shiftFilterDate(latestDate, -1)) },
+    { key: "previous-2", value: shiftFilterDate(latestDate, -2), label: formatMobileHistoryDate(shiftFilterDate(latestDate, -2)) },
+  ].filter((item) => item.value && (!dateInput?.min || item.value >= dateInput.min));
+}
+
+function mobileHistoryEarlierDates() {
+  const latestDate = dateInput?.max || dateInput?.value || "";
+  const minDate = dateInput?.min || "";
+  const items = [];
+  let value = shiftFilterDate(latestDate, -3);
+  while (value && (!minDate || value >= minDate)) {
+    items.push({ value, label: formatMobileHistoryDate(value) });
+    value = shiftFilterDate(value, -1);
+  }
+  return items;
+}
+
+function mobileHistoryQuickValues() {
+  return new Set(mobileHistoryDates().map((item) => item.value));
+}
+
+function shouldExpandMobileHistory() {
+  if (allDatesToggle?.checked) return true;
+  const selectedDate = dateInput?.value || "";
+  return Boolean(selectedDate && !mobileHistoryQuickValues().has(selectedDate));
+}
+
+function setMobileHistoryExpanded(expanded) {
+  if (!mobileHistoryPanel) return;
+  mobileHistoryPanel.dataset.expanded = String(expanded);
+}
+
+function updateMobileHistoryState() {
+  if (!mobileHistoryPanel) return;
+  const selectedDate = dateInput?.value || "";
+  const allDates = Boolean(allDatesToggle?.checked);
+  mobileHistoryPanel.querySelectorAll("[data-mobile-history-date]").forEach((button) => {
+    button.setAttribute("aria-pressed", String(!allDates && button.dataset.mobileHistoryDate === selectedDate));
+  });
+  const earlierButton = mobileHistoryPanel.querySelector("[data-mobile-history-earlier]");
+  if (earlierButton) earlierButton.setAttribute("aria-pressed", String(shouldExpandMobileHistory()));
+  const allDatesButton = mobileHistoryPanel.querySelector("[data-mobile-history-all]");
+  if (allDatesButton) allDatesButton.setAttribute("aria-pressed", String(allDates));
+  setMobileHistoryExpanded(shouldExpandMobileHistory());
+}
+
+function selectMobileHistoryDate(value) {
+  if (!dateInput || !value) return;
+  dateInput.value = value;
+  if (allDatesToggle) allDatesToggle.checked = false;
+  setMobileHistoryExpanded(false);
+  syncDateMode();
+  loadAll();
+  loadSuggestions();
+}
+
+function selectMobileHistoryAllDates() {
+  if (allDatesToggle) allDatesToggle.checked = true;
+  setMobileHistoryExpanded(true);
+  syncDateMode();
+  loadAll();
+  loadSuggestions();
+}
+
+function renderMobileHistoryPanel() {
+  if (!mobileHistoryPanel) return;
+  const quickDates = mobileHistoryDates();
+  const earlierDates = mobileHistoryEarlierDates();
+  mobileHistoryPanel.innerHTML = `
+    <div class="mobile-history-quick" role="group" aria-label="${escapeHtml(i18n("brief.history"))}">
+      ${quickDates.map((item) => `
+        <button class="mobile-history-chip" type="button" data-mobile-history-date="${escapeHtml(item.value)}" aria-pressed="false">
+          ${escapeHtml(item.label)}
+        </button>
+      `).join("")}
+      <button class="mobile-history-chip mobile-history-earlier" type="button" data-mobile-history-earlier aria-pressed="false">
+        ${escapeHtml(i18n("mobile.earlier"))}
+      </button>
+    </div>
+    <div class="mobile-history-complete" data-mobile-history-complete>
+      <button class="mobile-history-chip" type="button" data-mobile-history-all aria-pressed="false">
+        ${escapeHtml(i18n("date.all"))}
+      </button>
+      ${earlierDates.map((item) => `
+        <button class="mobile-history-chip" type="button" data-mobile-history-date="${escapeHtml(item.value)}" aria-pressed="false">
+          ${escapeHtml(item.label)}
+        </button>
+      `).join("")}
+    </div>
+  `;
+  mobileHistoryPanel.querySelectorAll("[data-mobile-history-date]").forEach((button) => {
+    button.addEventListener("click", () => selectMobileHistoryDate(button.dataset.mobileHistoryDate));
+  });
+  mobileHistoryPanel.querySelector("[data-mobile-history-all]")?.addEventListener("click", selectMobileHistoryAllDates);
+  mobileHistoryPanel.querySelector("[data-mobile-history-earlier]")?.addEventListener("click", () => {
+    setMobileHistoryExpanded(true);
+  });
+  updateMobileHistoryState();
 }
 
 function hasSummary(item) {
@@ -610,10 +1208,15 @@ function hasSummary(item) {
 }
 
 async function fetchJson(url, options = {}) {
-  const response = await fetch(url, options);
+  const headers = new Headers(options.headers || {});
+  if (state.session?.access_token) headers.set("Authorization", `Bearer ${state.session.access_token}`);
+  if (options.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
+  const response = await fetch(url, { ...options, headers });
   const data = await response.json();
   if (!response.ok) {
-    throw new Error(data.reason || data.detail || i18n("error.requestFailed"));
+    const error = new Error(data.reason || data.detail || i18n("error.requestFailed"));
+    error.status = response.status;
+    throw error;
   }
   return data;
 }
@@ -647,13 +1250,12 @@ async function loadAll() {
   const hasRenderedFeed = Boolean(feed.children.length);
   updateTopbarTitle();
   state.loading = true;
-  if (!hasRenderedFeed) document.body.classList.add("is-loading");
+  document.body.classList.add("is-loading");
   const searchActive = Boolean(state.query);
   setSearchMode(searchActive);
   hideHotTopics();
-  if (!hasRenderedFeed) {
-    setStatus(searchActive ? i18n("status.loadingSearch") : i18n("status.loadingDashboard"));
-  }
+  if (!hasRenderedFeed && searchActive) setStatus(i18n("status.loadingSearch"));
+  renderFeedSkeleton();
   try {
     const params = formParams();
     const feedData = await fetchJson(`/api/feed?${params}`, { signal: feedAbortController.signal });
@@ -687,7 +1289,8 @@ async function loadDailyBriefs() {
   state.loading = true;
   document.body.classList.add("is-loading");
   setViewMode("briefs");
-  setStatus(i18n("status.loadingBriefs"));
+  setStatus("");
+  renderDailyBriefSkeleton();
   try {
     const [briefData, archiveData] = await Promise.all([
       fetchJson(withLanguage("/api/brief")),
@@ -695,7 +1298,7 @@ async function loadDailyBriefs() {
     ]);
     if (requestId !== dailyBriefRequestId || requestLanguage !== state.language || state.view !== "briefs") return;
     renderBrief(briefData);
-    renderDailyBriefs(archiveData.items || []);
+    renderDailyBriefs(archiveData.items || [], briefData);
     setStatus("");
   } catch (error) {
     if (requestId !== dailyBriefRequestId || requestLanguage !== state.language || state.view !== "briefs") return;
@@ -709,11 +1312,16 @@ async function loadDailyBriefs() {
 }
 
 async function loadFavorites() {
+  if (!await ensureUser()) {
+    showFavoritesSignInPrompt();
+    return;
+  }
   if (state.loading) return;
   state.loading = true;
   document.body.classList.add("is-loading");
   setViewMode("favorites");
-  setStatus(i18n("status.loadingFavorites"));
+  setStatus("");
+  renderFavoritesSkeleton();
   try {
     const data = await fetchJson(withLanguage("/api/favorites"));
     renderFavorites(data);
@@ -778,12 +1386,19 @@ function setSidebarCollapsed(collapsed) {
   sidebarToggle.setAttribute("aria-label", collapsed ? i18n("sidebar.expand") : i18n("sidebar.collapse"));
 }
 
-function setTheme(theme) {
+function setTheme(theme, persist = false) {
   const selectedTheme = theme === "light" ? "light" : "dark";
   document.documentElement.dataset.theme = selectedTheme;
-  window.localStorage.setItem("newser.theme", selectedTheme);
   const isLight = selectedTheme === "light";
   themeToggles.forEach((button) => {
+    const themeValue = button.dataset.themeValue;
+    if (themeValue) {
+      const selected = themeValue === selectedTheme;
+      button.setAttribute("aria-pressed", String(selected));
+      button.setAttribute("aria-label", themeValue === "light" ? i18n("theme.light") : i18n("theme.dark"));
+      button.setAttribute("title", themeValue === "light" ? i18n("theme.light") : i18n("theme.dark"));
+      return;
+    }
     button.setAttribute("aria-pressed", String(isLight));
     button.setAttribute("aria-label", isLight ? i18n("theme.toDark") : i18n("theme.toLight"));
     button.setAttribute("title", isLight ? i18n("theme.toDark") : i18n("theme.toLight"));
@@ -791,21 +1406,24 @@ function setTheme(theme) {
   themeStateLabels.forEach((label) => {
     label.textContent = isLight ? i18n("theme.light") : i18n("theme.dark");
   });
+  if (persist) savePreferences();
 }
 
 function initTheme() {
-  const savedTheme = window.localStorage.getItem("newser.theme") || "dark";
-  setTheme(savedTheme);
+  setTheme("dark");
   themeToggles.forEach((button) => button.addEventListener("click", () => {
     const currentTheme = document.documentElement.dataset.theme === "light" ? "light" : "dark";
-    setTheme(currentTheme === "light" ? "dark" : "light");
+    const nextTheme = button.dataset.themeValue || (currentTheme === "light" ? "dark" : "light");
+    setTheme(nextTheme, true);
   }));
 }
 
 function initLanguage() {
   applyTranslations();
   languageButtons.forEach((button) => {
-    button.addEventListener("click", () => setLanguage(button.dataset.languageOption || "es"));
+    button.addEventListener("click", () => {
+      setLanguage(button.dataset.languageOption || "es");
+    });
   });
 }
 
@@ -813,17 +1431,28 @@ function isPhoneViewport() {
   return window.matchMedia("(max-width: 900px)").matches;
 }
 
+function syncMobileMenuToggleState() {
+  const expanded = document.body.classList.contains("mobile-drawer-open");
+  if (mobileMenuToggle) {
+    mobileMenuToggle.setAttribute("aria-expanded", String(expanded));
+    mobileMenuToggle.setAttribute("aria-label", i18n(expanded ? "mobile.closeFilters" : "mobile.openFilters"));
+  }
+  if (sidebarToggle && isPhoneViewport()) {
+    sidebarToggle.setAttribute("aria-label", i18n(expanded ? "mobile.closeFilters" : "mobile.openFilters"));
+  }
+}
+
 function openMobileDrawer() {
   if (!isPhoneViewport()) return;
   document.body.classList.add("mobile-drawer-open");
   if (mobileDrawerBackdrop) mobileDrawerBackdrop.hidden = false;
-  mobileMenuToggle?.setAttribute("aria-expanded", "true");
+  syncMobileMenuToggleState();
 }
 
 function closeMobileDrawer() {
   document.body.classList.remove("mobile-drawer-open");
   if (mobileDrawerBackdrop) mobileDrawerBackdrop.hidden = true;
-  mobileMenuToggle?.setAttribute("aria-expanded", "false");
+  syncMobileMenuToggleState();
 }
 
 function initMobileShell() {
@@ -859,11 +1488,16 @@ function expandableText(content, className, label = "", preview = "") {
   const shortText = String(preview || text);
   const labelAttr = label ? ` aria-label="${escapeHtml(label)}"` : "";
   return `
-    <button type="button" class="${className} expandable-text" data-expandable-text aria-expanded="false"${labelAttr}>
-      <span data-full-text="${escapeHtml(text)}" data-short-text="${escapeHtml(shortText)}">${escapeHtml(shortText)}</span>
+    <button type="button" class="${className} expandable-text" data-expandable-text data-expandable-available="false" aria-expanded="false"${labelAttr}>
+      <span data-full-text="${escapeHtml(text)}" data-short-text="${escapeHtml(shortText)}">${escapeHtml(text)}</span>
       <small data-expandable-label>${expandableLabel(false)}</small>
     </button>
   `;
+}
+
+function briefText(content) {
+  const text = String(content || "").trim();
+  return text ? `<p class="brief-text">${escapeHtml(text)}</p>` : "";
 }
 
 function toggleExpandableText(button) {
@@ -873,7 +1507,7 @@ function toggleExpandableText(button) {
   button.setAttribute("aria-expanded", String(nextExpanded));
   const text = button.querySelector("span");
   if (text) {
-    text.textContent = nextExpanded ? text.dataset.fullText || text.textContent : text.dataset.shortText || text.textContent;
+    text.textContent = text.dataset.fullText || text.textContent;
   }
   const label = button.querySelector("[data-expandable-label]");
   if (label) label.textContent = expandableLabel(nextExpanded);
@@ -883,9 +1517,8 @@ function syncExpandableTextLabels(root = document) {
   root.querySelectorAll("[data-expandable-text]").forEach((button) => {
     const text = button.querySelector("span");
     if (!text) return;
-    const hasAlternateFullText = (text.dataset.fullText || "") !== (text.dataset.shortText || "");
     const hasOverflow = text.scrollHeight > text.clientHeight + 1;
-    button.dataset.expandableAvailable = String(hasAlternateFullText || hasOverflow);
+    button.dataset.expandableAvailable = String(hasOverflow);
   });
 }
 
@@ -908,16 +1541,103 @@ function initSidebar() {
   });
 }
 
-function renderBrief(data) {
-  if (!data.available) {
+function renderArticleSkeleton() {
+  return `
+    <article class="article article-skeleton" aria-hidden="true">
+      <div class="article-top">
+        <div class="article-meta-stack skeleton-stack">
+          <span class="shimmer-line shimmer-meta"></span>
+          <span class="shimmer-pill shimmer-pill-small"></span>
+        </div>
+        <div class="article-controls">
+          <span class="shimmer-line shimmer-score"></span>
+          <span class="shimmer-dot"></span>
+        </div>
+      </div>
+      <div class="article-main article-skeleton-main">
+        <div class="article-content skeleton-stack">
+          <span class="shimmer-line shimmer-title"></span>
+          <span class="shimmer-line"></span>
+          <span class="shimmer-line shimmer-copy"></span>
+          <span class="shimmer-line shimmer-copy-short"></span>
+          <div class="tag-row">
+            <span class="shimmer-pill"></span>
+            <span class="shimmer-pill shimmer-pill-small"></span>
+          </div>
+        </div>
+        <div class="article-visual">
+          <span class="shimmer-media"></span>
+        </div>
+      </div>
+      <div class="article-foot">
+        <span class="shimmer-line shimmer-foot"></span>
+        <div class="article-actions">
+          <span class="shimmer-button"></span>
+          <span class="shimmer-button shimmer-button-wide"></span>
+        </div>
+      </div>
+    </article>
+  `;
+}
+
+function renderFeedSkeleton(target = feed, count = 3) {
+  if (!target) return;
+  target.innerHTML = Array.from({ length: count }, renderArticleSkeleton).join("");
+}
+
+function renderInitialFeedSkeleton() {
+  if (state.view !== "today" || feed.children.length) return;
+  document.body.classList.add("is-loading");
+  hideHotTopics();
+  renderFeedSkeleton();
+}
+
+function renderDailyBriefSkeleton() {
+  if (dailyBriefArchiveCount) dailyBriefArchiveCount.textContent = "";
+  if (briefMobileHistory) briefMobileHistory.innerHTML = "";
+  setBriefMobileHistoryExpanded(false);
+  brief.innerHTML = `
+    <article class="daily-brief-card brief-loading-card" aria-hidden="true">
+      <div class="brief-loading-head">
+        <span class="skeleton-stack">
+          <span class="brief-loading-line brief-loading-date"></span>
+          <span class="brief-loading-line brief-loading-title"></span>
+          <span class="brief-loading-line brief-loading-note"></span>
+        </span>
+        <span class="brief-loading-orb"></span>
+      </div>
+      <div class="brief-loading-body skeleton-stack">
+        <span class="brief-loading-line"></span>
+        <span class="brief-loading-line brief-loading-copy"></span>
+        <span class="brief-loading-line brief-loading-copy-short"></span>
+      </div>
+    </article>
+  `;
+  dailyBriefsList.innerHTML = Array.from({ length: 7 }, () => `
+    <div class="brief-archive-item brief-archive-skeleton" aria-hidden="true">
+      <span class="brief-loading-dot"></span>
+      <span class="skeleton-stack">
+        <span class="brief-loading-line brief-loading-row-title"></span>
+        <span class="brief-loading-line brief-loading-row-copy"></span>
+      </span>
+    </div>
+  `).join("");
+}
+
+function renderFavoritesSkeleton() {
+  renderFeedSkeleton(favoritesFeed, 3);
+}
+
+function renderBrief(data, context = {}) {
+  if (data.available === false) {
     const missingMessage = data.catchup_started || data.catchup_running
       ? i18n("brief.generating")
       : i18n("brief.missing");
     brief.innerHTML = renderCurrentBriefShell(
       `<div class="empty">${escapeHtml(missingMessage)}</div>`,
       "",
+      context,
     );
-    bindCurrentBriefToggle();
     return;
   }
   const json = data.brief_json;
@@ -928,43 +1648,41 @@ function renderBrief(data) {
       .map((item, index) => `
         <article class="brief-item">
           <h4>${index + 1}. ${escapeHtml(item.title || i18n("article.untitled"))}</h4>
-          ${expandableText(item.summary, "brief-text", item.title || i18n("article.untitled"))}
+          ${briefText(item.summary)}
           ${item.why_it_matters ? `<p><strong>${i18n("brief.why")}</strong> ${escapeHtml(item.why_it_matters)}</p>` : ""}
         </article>
       `)
       .join("");
     if (json.trend_reading) {
-      body += `<article class="brief-item"><h4>${i18n("brief.trend")}</h4>${expandableText(json.trend_reading, "brief-text", i18n("brief.trend"))}</article>`;
+      body += `<article class="brief-item"><h4>${i18n("brief.trend")}</h4>${briefText(json.trend_reading)}</article>`;
     }
   } else {
     body = `<p>${escapeHtml(data.texto || "")}</p>`;
   }
-  const meta = `${escapeHtml(data.n_noticias)} ${i18n("brief.articles")} - ${escapeHtml(data.modelo)}`;
-  brief.innerHTML = renderCurrentBriefShell(body, meta);
-  bindCurrentBriefToggle();
-  syncExpandableTextLabels(brief);
+  const meta = `${escapeHtml(data.n_noticias)} ${i18n("brief.articles")}`;
+  brief.innerHTML = renderCurrentBriefShell(body, meta, context);
 }
 
-function renderCurrentBriefShell(body, meta) {
-  return `
-    <button class="daily-brief-toggle current-brief-toggle" type="button" data-current-brief-toggle aria-expanded="true" aria-controls="today-brief-body">
-      <span>
-        <small>${i18n("date.today")}</small>
-        <strong>${i18n("brief.executive")}</strong>
-        <small class="brief-schedule-note">${i18n("brief.schedule")}</small>
-        ${meta ? `<small>${meta}</small>` : ""}
-      </span>
-      <span class="daily-brief-chevron" aria-hidden="true"></span>
-    </button>
-    <div id="today-brief-body" class="daily-brief-body current-brief-body">${body}</div>
+function renderCurrentBriefShell(body, meta, context = {}) {
+  const label = context.label || i18n("date.today");
+  const title = context.title || i18n("brief.executive");
+  const note = context.note === undefined ? i18n("brief.schedule") : context.note;
+  const header = `
+    <span>
+      <small>${escapeHtml(label)}</small>
+      <strong>${escapeHtml(title)}</strong>
+      ${note ? `<small class="brief-schedule-note">${escapeHtml(note)}</small>` : ""}
+      ${meta ? `<small>${meta}</small>` : ""}
+    </span>
   `;
-}
-
-function bindCurrentBriefToggle() {
-  const button = brief.querySelector("[data-current-brief-toggle]");
-  if (button) {
-    button.addEventListener("click", () => toggleDailyBrief(button));
-  }
+  return `
+    <article class="daily-brief-card current-brief-card">
+      <div class="daily-brief-toggle current-brief-toggle" data-current-brief-static>
+        ${header}
+      </div>
+      <div id="today-brief-body" class="daily-brief-body current-brief-body">${body}</div>
+    </article>
+  `;
 }
 
 function renderBriefBody(data) {
@@ -975,60 +1693,229 @@ function renderBriefBody(data) {
       .map((item, index) => `
         <article class="brief-item">
           <h4>${index + 1}. ${escapeHtml(item.title || i18n("article.untitled"))}</h4>
-          ${expandableText(item.summary, "brief-text", item.title || i18n("article.untitled"))}
+          ${briefText(item.summary)}
           ${item.why_it_matters ? `<p><strong>${i18n("brief.why")}</strong> ${escapeHtml(item.why_it_matters)}</p>` : ""}
         </article>
       `)
       .join("");
     if (json.trend_reading) {
-      body += `<article class="brief-item"><h4>${i18n("brief.trend")}</h4>${expandableText(json.trend_reading, "brief-text", i18n("brief.trend"))}</article>`;
+      body += `<article class="brief-item"><h4>${i18n("brief.trend")}</h4>${briefText(json.trend_reading)}</article>`;
     }
     return body;
   }
   return `<p>${escapeHtml(data.texto || "")}</p>`;
 }
 
-function renderDailyBriefs(items) {
+function briefArchiveTitle(item) {
+  const json = item.brief_json;
+  if (json && Array.isArray(json.items) && json.items.length) {
+    return json.items[0].title || json.intro || item.fecha || i18n("brief.daily");
+  }
+  const text = String(item.texto || "").replace(/\s+/g, " ").trim();
+  return text ? text.slice(0, 92) : item.fecha || i18n("brief.daily");
+}
+
+function formatArchiveDate(value) {
+  if (!value) return "";
+  const parts = String(value).split("-").map((part) => Number.parseInt(part, 10));
+  if (parts.length !== 3 || parts.some(Number.isNaN)) return value;
+  const date = new Date(parts[0], parts[1] - 1, parts[2]);
+  return date.toLocaleDateString(locale(), { month: "short", day: "numeric" });
+}
+
+function archiveMonthKey(value) {
+  const parts = String(value || "").split("-").map((part) => Number.parseInt(part, 10));
+  if (parts.length !== 3 || parts.some(Number.isNaN)) return "";
+  return `${parts[0]}-${String(parts[1]).padStart(2, "0")}`;
+}
+
+function formatArchiveMonth(value) {
+  const parts = String(value || "").split("-").map((part) => Number.parseInt(part, 10));
+  if (parts.length !== 3 || parts.some(Number.isNaN)) return value || "";
+  const date = new Date(parts[0], parts[1] - 1, 1);
+  return date.toLocaleDateString(locale(), { month: "long", year: "numeric" });
+}
+
+function currentArchiveMonthKey() {
+  const today = new Date();
+  return `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function setBriefMobileHistoryExpanded(expanded) {
+  dailyBriefs?.setAttribute("data-mobile-history-expanded", String(expanded));
+  if (dailyBriefsList) dailyBriefsList.dataset.mobileExpanded = String(expanded);
+  if (dailyBriefArchiveCount?.dataset.fullCount) {
+    dailyBriefArchiveCount.textContent = expanded
+      ? dailyBriefArchiveCount.dataset.previousDaysCount || "0"
+      : dailyBriefArchiveCount.dataset.fullCount;
+  }
+  dailyBriefsList?.querySelectorAll("[data-brief-archive-month-count]").forEach((count) => {
+    count.textContent = expanded
+      ? count.dataset.previousDaysCount || "0"
+      : count.dataset.fullCount || "0";
+  });
+}
+
+function renderBriefMobileHistory(items, todayData = null) {
+  if (!briefMobileHistory) return;
+  const quickArchiveItems = items.slice(0, 2);
+  briefMobileHistory.innerHTML = `
+    ${todayData ? `
+      <button class="mobile-history-chip" type="button" data-brief-mobile-today aria-pressed="true">
+        ${escapeHtml(i18n("date.today"))}
+      </button>
+    ` : ""}
+    ${quickArchiveItems.map((item, index) => `
+      <button class="mobile-history-chip" type="button" data-brief-mobile-index="${index}" aria-pressed="false">
+        ${escapeHtml(formatMobileHistoryDate(item.fecha))}
+      </button>
+    `).join("")}
+    <button class="mobile-history-chip brief-archive-earlier" type="button" data-brief-mobile-previous-days aria-pressed="false">
+      ${escapeHtml(i18n("mobile.previousDays"))}
+    </button>
+  `;
+  setBriefMobileHistoryExpanded(false);
+  briefMobileHistory.querySelector("[data-brief-mobile-today]")?.addEventListener("click", (event) => {
+    briefMobileHistory.querySelectorAll(".mobile-history-chip").forEach((button) => {
+      button.setAttribute("aria-pressed", String(button === event.currentTarget));
+    });
+    setBriefMobileHistoryExpanded(false);
+    if (todayData) renderBrief(todayData);
+  });
+  briefMobileHistory.querySelectorAll("[data-brief-mobile-index]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const index = Number.parseInt(button.dataset.briefMobileIndex || "-1", 10);
+      const item = items[index];
+      if (!item) return;
+      briefMobileHistory.querySelectorAll(".mobile-history-chip").forEach((other) => {
+        other.setAttribute("aria-pressed", String(other === button));
+      });
+      setBriefMobileHistoryExpanded(false);
+      renderBrief(
+        { ...item, available: true },
+        { label: formatArchiveDate(item.fecha), title: i18n("brief.daily"), note: "" },
+      );
+    });
+  });
+  briefMobileHistory.querySelector("[data-brief-mobile-previous-days]")?.addEventListener("click", (event) => {
+    setBriefMobileHistoryExpanded(true);
+    briefMobileHistory.querySelectorAll(".mobile-history-chip").forEach((button) => {
+      button.setAttribute("aria-pressed", String(button === event.currentTarget));
+    });
+  });
+}
+
+function renderDailyBriefs(items, todayData = null) {
+  if (dailyBriefArchiveCount) {
+    dailyBriefArchiveCount.dataset.fullCount = String(items.length);
+    dailyBriefArchiveCount.dataset.previousDaysCount = String(Math.max(items.length - 2, 0));
+    dailyBriefArchiveCount.textContent = dailyBriefArchiveCount.dataset.fullCount;
+  }
+  renderBriefMobileHistory(items, todayData);
+  const todayRow = todayData ? `
+    <article class="brief-archive-item brief-archive-today">
+      <button class="brief-archive-button" type="button" data-daily-brief-today aria-pressed="true">
+        <span class="brief-archive-date">${escapeHtml(i18n("date.today"))}</span>
+        <span class="brief-archive-copy">
+          <strong>${escapeHtml(briefArchiveTitle(todayData))}</strong>
+          <small>${todayData.available ? `${escapeHtml(todayData.n_noticias)} ${i18n("brief.articles")}` : escapeHtml(i18n("brief.missing"))}</small>
+        </span>
+      </button>
+    </article>
+  ` : "";
   if (!items.length) {
     dailyBriefsList.innerHTML = `
-      <div class="empty panel archive-empty">
+      ${todayRow}
+      <div class="empty archive-empty">
         <strong>${i18n("brief.noPreviousTitle")}</strong>
         <span>${i18n("brief.noPreviousBody")}</span>
       </div>
     `;
     return;
   }
-  dailyBriefsList.innerHTML = items
-    .map((item, index) => {
-      const detailId = `daily-brief-${index}`;
-      const expanded = index === 0;
+  const groups = [];
+  items.forEach((item, index) => {
+    const monthKey = archiveMonthKey(item.fecha);
+    const lastGroup = groups[groups.length - 1];
+    if (!lastGroup || lastGroup.monthKey !== monthKey) {
+      groups.push({ monthKey, label: formatArchiveMonth(item.fecha), items: [] });
+    }
+    groups[groups.length - 1].items.push({ item, index });
+  });
+  const currentMonthKey = currentArchiveMonthKey();
+  const fullArchive = groups
+    .map((group, groupIndex) => {
+      const expanded = group.monthKey === currentMonthKey;
+      const panelId = `brief-archive-month-${groupIndex}`;
+      const mobilePreviousCount = group.items.filter(({ index }) => index >= 2).length;
+      const monthItems = group.items.map(({ item, index }) => {
       return `
-      <article class="daily-brief-card">
-        <button class="daily-brief-toggle" type="button" data-daily-brief-toggle aria-expanded="${expanded}" aria-controls="${detailId}">
-          <span>
-            <strong>${escapeHtml(item.fecha)}</strong>
-            <small>${escapeHtml(item.n_noticias)} ${i18n("brief.articles")} - ${escapeHtml(item.modelo)}</small>
+      <article class="brief-archive-item${index < 2 ? " brief-archive-mobile-quick" : ""}">
+        <button class="brief-archive-button" type="button" data-daily-brief-toggle data-brief-index="${index}" aria-pressed="false">
+          <span class="brief-archive-date">${escapeHtml(formatArchiveDate(item.fecha))}</span>
+          <span class="brief-archive-copy">
+            <strong>${escapeHtml(briefArchiveTitle(item))}</strong>
+            <small>${escapeHtml(item.n_noticias)} ${i18n("brief.articles")}</small>
           </span>
-          <span class="daily-brief-chevron" aria-hidden="true"></span>
         </button>
-        <div id="${detailId}" class="daily-brief-body" ${expanded ? "" : "hidden"}>${renderBriefBody(item)}</div>
       </article>
+    `;
+      }).join("");
+      return `
+      <section class="brief-archive-month" data-brief-archive-month data-mobile-previous-count="${mobilePreviousCount}">
+        <button class="brief-archive-month-button" type="button" aria-expanded="${expanded}" aria-controls="${panelId}">
+          <span class="brief-archive-month-arrow" aria-hidden="true"></span>
+          <span>${escapeHtml(group.label)}</span>
+          <span class="brief-archive-month-count" data-brief-archive-month-count data-full-count="${group.items.length}" data-previous-days-count="${mobilePreviousCount}">${group.items.length}</span>
+        </button>
+        <div id="${panelId}" class="brief-archive-month-items" ${expanded ? "" : "hidden"}>
+          ${monthItems}
+        </div>
+      </section>
     `;
     })
     .join("");
+  dailyBriefsList.dataset.mobileExpanded = "false";
+  dailyBriefsList.innerHTML = `
+    ${todayRow}
+    <div class="brief-archive-full" data-brief-archive-full>
+      ${fullArchive}
+    </div>
+  `;
+  const todayButton = dailyBriefsList.querySelector("[data-daily-brief-today]");
+  if (todayButton && todayData) {
+    dailyBriefsList.querySelectorAll("[data-daily-brief-today]").forEach((button) => button.addEventListener("click", () => {
+      dailyBriefsList.querySelectorAll("[data-daily-brief-toggle], [data-daily-brief-today]").forEach((other) => {
+        other.setAttribute("aria-pressed", String(other === button));
+      });
+      setBriefMobileHistoryExpanded(false);
+      renderBrief(todayData);
+    }));
+  }
   dailyBriefsList.querySelectorAll("[data-daily-brief-toggle]").forEach((button) => {
-    button.addEventListener("click", () => toggleDailyBrief(button));
+    button.addEventListener("click", () => {
+      const index = Number.parseInt(button.dataset.briefIndex || "-1", 10);
+      const item = items[index];
+      if (!item) return;
+      dailyBriefsList.querySelectorAll("[data-daily-brief-toggle], [data-daily-brief-today]").forEach((other) => {
+        other.setAttribute("aria-pressed", String(other === button));
+      });
+      setBriefMobileHistoryExpanded(false);
+      renderBrief(
+        { ...item, available: true },
+        { label: formatArchiveDate(item.fecha), title: i18n("brief.daily"), note: "" },
+      );
+    });
   });
-  syncExpandableTextLabels(dailyBriefsList);
-}
-
-function toggleDailyBrief(button) {
-  const detail = document.getElementById(button.getAttribute("aria-controls"));
-  if (!detail) return;
-  const expanded = button.getAttribute("aria-expanded") === "true";
-  button.setAttribute("aria-expanded", String(!expanded));
-  detail.hidden = expanded;
-  if (expanded === false) syncExpandableTextLabels(detail);
+  dailyBriefsList.querySelectorAll(".brief-archive-month-button").forEach((button) => {
+    button.addEventListener("click", () => {
+      const panel = document.getElementById(button.getAttribute("aria-controls"));
+      if (!panel) return;
+      const expanded = button.getAttribute("aria-expanded") === "true";
+      button.setAttribute("aria-expanded", String(!expanded));
+      panel.hidden = expanded;
+    });
+  });
 }
 
 function renderFavorites(data) {
@@ -1045,6 +1932,72 @@ function renderFavorites(data) {
   favoritesFeed.innerHTML = data.items.map(renderArticle).join("");
   bindArticleActions(favoritesFeed);
   syncExpandableTextLabels(favoritesFeed);
+}
+
+function closeAuthRequiredDialog(restoreFocus = true) {
+  if (!authRequiredDialog) return;
+  if (typeof authRequiredDialog.close === "function" && authRequiredDialog.open) {
+    authRequiredDialog.close();
+  } else {
+    authRequiredDialog.hidden = true;
+  }
+  if (restoreFocus) authDialogReturnFocus?.focus();
+  authDialogReturnFocus = null;
+}
+
+function showAuthRequiredDialog(trigger, message = "", isError = false) {
+  if (state.user) return true;
+  authDialogReturnFocus = trigger instanceof HTMLElement ? trigger : document.activeElement;
+  if (!authRequiredDialog) {
+    requireLogin();
+    return false;
+  }
+  setAuthRequiredMessage(message, isError);
+  if (!message) setStatus("");
+  if (typeof authRequiredDialog.showModal === "function") {
+    if (!authRequiredDialog.open) authRequiredDialog.showModal();
+  } else {
+    authRequiredDialog.hidden = false;
+  }
+  authRequiredDialog.querySelector("[data-login-prompt]")?.focus();
+  return false;
+}
+
+function showFavoritesSignInPrompt(trigger) {
+  setViewMode("favorites");
+  favoritesFeed.innerHTML = "";
+  setStatus("");
+  showAuthRequiredDialog(trigger);
+}
+
+function closeLogoutConfirmDialog() {
+  if (!logoutConfirmDialog) return;
+  if (typeof logoutConfirmDialog.close === "function" && logoutConfirmDialog.open) {
+    logoutConfirmDialog.close();
+  } else {
+    logoutConfirmDialog.hidden = true;
+  }
+}
+
+function showLogoutConfirmDialog(trigger) {
+  authDialogReturnFocus = trigger instanceof HTMLElement ? trigger : document.activeElement;
+  if (!logoutConfirmDialog) return;
+  if (typeof logoutConfirmDialog.showModal === "function") {
+    if (!logoutConfirmDialog.open) logoutConfirmDialog.showModal();
+  } else {
+    logoutConfirmDialog.hidden = false;
+  }
+  logoutConfirmAction?.focus();
+}
+
+async function confirmLogout() {
+  closeLogoutConfirmDialog();
+  if (authClient) await authClient.auth.signOut();
+  await hydrateAuthenticatedUser(null);
+  setViewMode("today");
+  loadAll();
+  authDialogReturnFocus?.focus();
+  authDialogReturnFocus = null;
 }
 
 function renderHotTopics(items) {
@@ -1262,6 +2215,7 @@ function setSummaryLoading(articleId, loading) {
 }
 
 async function generateSummary(articleId, button) {
+  if (!await ensureUser(button)) return;
   if (summaryRequests.has(articleId)) return summaryRequests.get(articleId);
   setSummaryLoading(articleId, true);
   const request = (async () => {
@@ -1309,6 +2263,7 @@ function applyGeneratedSummary(articleId, summary, button) {
 }
 
 async function toggleFavorite(articleId, button) {
+  if (!await ensureUser(button)) return;
   const wasFavorite = button.getAttribute("aria-pressed") === "true";
   button.disabled = true;
   try {
@@ -1501,7 +2456,7 @@ filters.addEventListener("change", () => {
   loadSuggestions();
 });
 navButtons.forEach((button) => {
-  button.addEventListener("click", () => {
+  button.addEventListener("click", async () => {
     const target = button.dataset.viewTarget || "today";
     if (target === state.view) return;
     if (target === "today") {
@@ -1510,8 +2465,13 @@ navButtons.forEach((button) => {
     } else if (target === "briefs") {
       loadDailyBriefs();
     } else if (target === "favorites") {
+      if (!await ensureUser(button)) {
+        showFavoritesSignInPrompt(button);
+        return;
+      }
       loadFavorites();
     } else if (target === "sources") {
+      if (!await ensureUser(button)) return;
       setViewMode("sources");
       setStatus("");
     } else if (target === "more") {
@@ -1557,6 +2517,21 @@ mediaModalClose?.addEventListener("click", closeMediaModal);
 mediaModal?.addEventListener("click", (event) => {
   if (event.target === mediaModal) closeMediaModal();
 });
+authRequiredDialog?.querySelector("[data-login-prompt]")?.addEventListener("click", () => {
+  closeAuthRequiredDialog(false);
+  requireLogin();
+});
+authRequiredClose?.addEventListener("click", () => closeAuthRequiredDialog());
+authRequiredDialog?.querySelector("[data-auth-dialog-close]")?.addEventListener("click", () => closeAuthRequiredDialog());
+authRequiredDialog?.addEventListener("cancel", () => {
+  window.setTimeout(() => closeAuthRequiredDialog(), 0);
+});
+logoutConfirmAction?.addEventListener("click", confirmLogout);
+logoutConfirmCancel?.addEventListener("click", closeLogoutConfirmDialog);
+logoutConfirmClose?.addEventListener("click", closeLogoutConfirmDialog);
+logoutConfirmDialog?.addEventListener("cancel", () => {
+  window.setTimeout(() => closeLogoutConfirmDialog(), 0);
+});
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && mediaModal && !mediaModal.hidden) {
     closeMediaModal();
@@ -1573,5 +2548,6 @@ initMultiSelects();
 initSourcePreferences();
 initLanguage();
 syncDateMode();
-loadAll();
+renderInitialFeedSkeleton();
+initAuth().finally(loadAll);
 window.setInterval(loadAll, 300000);
