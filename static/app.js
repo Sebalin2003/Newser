@@ -1,5 +1,7 @@
 const state = {
   query: "",
+  page: 1,
+  pageSize: 24,
   loading: false,
   pendingLoad: false,
   view: "today",
@@ -70,7 +72,6 @@ const I18N = {
     "mobile.briefs": "Briefs",
     "mobile.saved": "Favoritos",
     "mobile.more": "Más",
-    "mobile.earlier": "Anteriores",
     "mobile.previousDays": "Días anteriores",
     "search.placeholder": "Buscar",
     "search.clear": "Limpiar búsqueda",
@@ -108,6 +109,14 @@ const I18N = {
     "feed.trends": "Tendencias",
     "feed.publications": "publicaciones",
     "feed.empty": "Ninguna publicación coincide con los filtros activos.",
+    "pagination.feed": "Paginación de publicaciones",
+    "pagination.previous": "Anterior",
+    "pagination.next": "Siguiente",
+    "pagination.page": "Página",
+    "pagination.jump": "Ir",
+    "pagination.jumpLabel": "Ir a página",
+    "pagination.of": "de",
+    "pagination.ellipsis": "Más páginas",
     "article.untitled": "Sin título",
     "article.media": "Media del artículo",
     "article.openImage": "Abrir vista previa de imagen",
@@ -205,7 +214,6 @@ const I18N = {
     "mobile.briefs": "Briefs",
     "mobile.saved": "Saved",
     "mobile.more": "More",
-    "mobile.earlier": "Earlier",
     "mobile.previousDays": "Previous Days",
     "search.placeholder": "Search",
     "search.clear": "Clear search",
@@ -243,6 +251,14 @@ const I18N = {
     "feed.trends": "Trends",
     "feed.publications": "publications",
     "feed.empty": "No publications match the active filters.",
+    "pagination.feed": "Publication pagination",
+    "pagination.previous": "Previous",
+    "pagination.next": "Next",
+    "pagination.page": "Page",
+    "pagination.jump": "Go",
+    "pagination.jumpLabel": "Go to page",
+    "pagination.of": "of",
+    "pagination.ellipsis": "More pages",
     "article.untitled": "Untitled",
     "article.media": "Article media",
     "article.openImage": "Open image preview",
@@ -300,6 +316,7 @@ const mobileDrawerBackdrop = document.querySelector("#mobile-drawer-backdrop");
 const mobileMore = document.querySelector("#mobile-more");
 const navButtons = document.querySelectorAll("[data-view-target]");
 const feed = document.querySelector("#feed");
+const feedPagination = document.querySelector("#feed-pagination");
 const feedTitle = document.querySelector("#feed-title");
 const feedMeta = document.querySelector("#feed-meta");
 const topbarTitle = document.querySelector(".topbar h2");
@@ -307,7 +324,6 @@ const topbarTitleMain = document.querySelector("#topbar-title-main");
 const topbarDate = document.querySelector("#topbar-date");
 const dateInput = filters.querySelector('input[name="fecha"]');
 const allDatesToggle = document.querySelector("[data-all-dates]");
-const mobileHistoryPanel = document.querySelector("[data-mobile-history-panel]");
 const stats = document.querySelector("#stats");
 const brief = document.querySelector("#brief");
 const hotTopics = document.querySelector("#hot-topics");
@@ -454,22 +470,6 @@ function parseFilterDate(value) {
   return new Date(parts[0], parts[1] - 1, parts[2]);
 }
 
-function formatFilterDate(date) {
-  if (!(date instanceof Date) || Number.isNaN(date.getTime())) return "";
-  return [
-    date.getFullYear(),
-    String(date.getMonth() + 1).padStart(2, "0"),
-    String(date.getDate()).padStart(2, "0"),
-  ].join("-");
-}
-
-function shiftFilterDate(value, offsetDays) {
-  const date = parseFilterDate(value);
-  if (!date) return "";
-  date.setDate(date.getDate() + offsetDays);
-  return formatFilterDate(date);
-}
-
 function formatMobileHistoryDate(value) {
   const date = parseFilterDate(value);
   if (!date) return "";
@@ -501,7 +501,6 @@ function applyTranslations() {
   syncDateMode();
   updateMultiSelectLabels();
   updateTopbarTitle();
-  renderMobileHistoryPanel();
   syncMobileMenuToggleState();
   renderAccount();
 }
@@ -510,6 +509,7 @@ function setLanguage(language, persist = true) {
   const nextLanguage = language === "en" ? "en" : "es";
   if (state.language === nextLanguage) return;
   state.language = nextLanguage;
+  resetFeedPage();
   applyTranslations();
   if (persist) savePreferences();
   loadAll();
@@ -955,11 +955,13 @@ function initSourcePreferences() {
       if (!await ensureUser(button)) return;
       if (button.dataset.sourceAction === "reset") {
         resetSourcePreferences();
+        resetFeedPage();
         setStatus(i18n("status.sourcesReset"));
         loadAll();
         loadSuggestions();
       } else {
         applySourcePreferencesToFilters();
+        resetFeedPage();
         setStatus(i18n("status.sourcesApplied"));
         showSourceApplyFeedback(button);
         loadAll();
@@ -985,7 +987,21 @@ function formParams() {
   for (const source of checkedPrioritizedSources()) params.append("prioritized_fuentes", source);
   for (const area of data.getAll("areas")) params.append("areas", area);
   if (state.query) params.set("q", state.query);
+  params.set("page", String(state.page));
+  params.set("page_size", String(state.pageSize));
   return params;
+}
+
+function resetFeedPage() {
+  state.page = 1;
+}
+
+function setFeedPaginationLoading(loading) {
+  if (!feedPagination || feedPagination.hidden) return;
+  feedPagination.classList.toggle("is-loading", loading);
+  feedPagination.querySelectorAll("button, input").forEach((control) => {
+    control.disabled = loading;
+  });
 }
 
 function escapeHtml(value) {
@@ -1095,111 +1111,6 @@ function syncDateMode() {
   const allDates = Boolean(allDatesToggle?.checked);
   if (dateInput) dateInput.disabled = allDates;
   updateTopbarTitle();
-  updateMobileHistoryState();
-}
-
-function mobileHistoryDates() {
-  const latestDate = dateInput?.max || dateInput?.value || "";
-  return [
-    { key: "today", value: latestDate, label: i18n("date.today") },
-    { key: "previous-1", value: shiftFilterDate(latestDate, -1), label: formatMobileHistoryDate(shiftFilterDate(latestDate, -1)) },
-    { key: "previous-2", value: shiftFilterDate(latestDate, -2), label: formatMobileHistoryDate(shiftFilterDate(latestDate, -2)) },
-  ].filter((item) => item.value && (!dateInput?.min || item.value >= dateInput.min));
-}
-
-function mobileHistoryEarlierDates() {
-  const latestDate = dateInput?.max || dateInput?.value || "";
-  const minDate = dateInput?.min || "";
-  const items = [];
-  let value = shiftFilterDate(latestDate, -3);
-  while (value && (!minDate || value >= minDate)) {
-    items.push({ value, label: formatMobileHistoryDate(value) });
-    value = shiftFilterDate(value, -1);
-  }
-  return items;
-}
-
-function mobileHistoryQuickValues() {
-  return new Set(mobileHistoryDates().map((item) => item.value));
-}
-
-function shouldExpandMobileHistory() {
-  if (allDatesToggle?.checked) return true;
-  const selectedDate = dateInput?.value || "";
-  return Boolean(selectedDate && !mobileHistoryQuickValues().has(selectedDate));
-}
-
-function setMobileHistoryExpanded(expanded) {
-  if (!mobileHistoryPanel) return;
-  mobileHistoryPanel.dataset.expanded = String(expanded);
-}
-
-function updateMobileHistoryState() {
-  if (!mobileHistoryPanel) return;
-  const selectedDate = dateInput?.value || "";
-  const allDates = Boolean(allDatesToggle?.checked);
-  mobileHistoryPanel.querySelectorAll("[data-mobile-history-date]").forEach((button) => {
-    button.setAttribute("aria-pressed", String(!allDates && button.dataset.mobileHistoryDate === selectedDate));
-  });
-  const earlierButton = mobileHistoryPanel.querySelector("[data-mobile-history-earlier]");
-  if (earlierButton) earlierButton.setAttribute("aria-pressed", String(shouldExpandMobileHistory()));
-  const allDatesButton = mobileHistoryPanel.querySelector("[data-mobile-history-all]");
-  if (allDatesButton) allDatesButton.setAttribute("aria-pressed", String(allDates));
-  setMobileHistoryExpanded(shouldExpandMobileHistory());
-}
-
-function selectMobileHistoryDate(value) {
-  if (!dateInput || !value) return;
-  dateInput.value = value;
-  if (allDatesToggle) allDatesToggle.checked = false;
-  setMobileHistoryExpanded(false);
-  syncDateMode();
-  loadAll();
-  loadSuggestions();
-}
-
-function selectMobileHistoryAllDates() {
-  if (allDatesToggle) allDatesToggle.checked = true;
-  setMobileHistoryExpanded(true);
-  syncDateMode();
-  loadAll();
-  loadSuggestions();
-}
-
-function renderMobileHistoryPanel() {
-  if (!mobileHistoryPanel) return;
-  const quickDates = mobileHistoryDates();
-  const earlierDates = mobileHistoryEarlierDates();
-  mobileHistoryPanel.innerHTML = `
-    <div class="mobile-history-quick" role="group" aria-label="${escapeHtml(i18n("brief.history"))}">
-      ${quickDates.map((item) => `
-        <button class="mobile-history-chip" type="button" data-mobile-history-date="${escapeHtml(item.value)}" aria-pressed="false">
-          ${escapeHtml(item.label)}
-        </button>
-      `).join("")}
-      <button class="mobile-history-chip mobile-history-earlier" type="button" data-mobile-history-earlier aria-pressed="false">
-        ${escapeHtml(i18n("mobile.earlier"))}
-      </button>
-    </div>
-    <div class="mobile-history-complete" data-mobile-history-complete>
-      <button class="mobile-history-chip" type="button" data-mobile-history-all aria-pressed="false">
-        ${escapeHtml(i18n("date.all"))}
-      </button>
-      ${earlierDates.map((item) => `
-        <button class="mobile-history-chip" type="button" data-mobile-history-date="${escapeHtml(item.value)}" aria-pressed="false">
-          ${escapeHtml(item.label)}
-        </button>
-      `).join("")}
-    </div>
-  `;
-  mobileHistoryPanel.querySelectorAll("[data-mobile-history-date]").forEach((button) => {
-    button.addEventListener("click", () => selectMobileHistoryDate(button.dataset.mobileHistoryDate));
-  });
-  mobileHistoryPanel.querySelector("[data-mobile-history-all]")?.addEventListener("click", selectMobileHistoryAllDates);
-  mobileHistoryPanel.querySelector("[data-mobile-history-earlier]")?.addEventListener("click", () => {
-    setMobileHistoryExpanded(true);
-  });
-  updateMobileHistoryState();
 }
 
 function hasSummary(item) {
@@ -1251,6 +1162,7 @@ async function loadAll() {
   updateTopbarTitle();
   state.loading = true;
   document.body.classList.add("is-loading");
+  setFeedPaginationLoading(true);
   const searchActive = Boolean(state.query);
   setSearchMode(searchActive);
   hideHotTopics();
@@ -1274,6 +1186,7 @@ async function loadAll() {
       feedAbortController = null;
       state.loading = false;
       document.body.classList.remove("is-loading");
+      setFeedPaginationLoading(false);
     }
     if (state.pendingLoad) {
       state.pendingLoad = false;
@@ -2074,8 +1987,15 @@ function toggleTopicDetails(button) {
 
 function renderFeed(data) {
   const count = data.count || 0;
+  const total = Number(data.total ?? count);
+  const page = Number(data.page || 1);
+  const pageSize = Number(data.page_size || state.pageSize);
+  const start = total && count ? ((page - 1) * pageSize) + 1 : 0;
+  const end = total && count ? start + count - 1 : 0;
   feedTitle.textContent = state.query ? i18n("search.results") : i18n("feed.trends");
-  feedMeta.textContent = `${count} ${i18n("feed.publications")} - ${data.orden === "Mas reciente" ? i18n("filters.recent") : i18n("filters.score")}`;
+  const amount = total && count ? `${start}-${end} ${i18n("pagination.of")} ${total}` : "0";
+  feedMeta.textContent = `${amount} ${i18n("feed.publications")} - ${data.orden === "Mas reciente" ? i18n("filters.recent") : i18n("filters.score")}`;
+  renderFeedPagination(data);
   if (!count) {
     feed.innerHTML = `<div class="empty panel">${i18n("feed.empty")}</div>`;
     return;
@@ -2083,6 +2003,75 @@ function renderFeed(data) {
   feed.innerHTML = data.items.map(renderArticle).join("");
   bindArticleActions(feed);
   syncExpandableTextLabels(feed);
+}
+
+function pageWindow(page, totalPages) {
+  const pages = new Set([1, totalPages]);
+  for (let index = page - 2; index <= page + 2; index += 1) {
+    if (index >= 1 && index <= totalPages) pages.add(index);
+  }
+  const sorted = Array.from(pages).sort((a, b) => a - b);
+  const result = [];
+  sorted.forEach((value, index) => {
+    const previous = sorted[index - 1];
+    if (previous && value - previous > 1) result.push("ellipsis");
+    result.push(value);
+  });
+  return result;
+}
+
+function setFeedPage(page) {
+  const nextPage = Number.parseInt(page, 10);
+  if (!Number.isFinite(nextPage) || nextPage < 1 || nextPage === state.page) return;
+  state.page = nextPage;
+  loadAll();
+}
+
+function renderFeedPagination(data) {
+  if (!feedPagination) return;
+  const totalPages = Number(data.total_pages || 1);
+  const page = Number(data.page || 1);
+  state.page = page;
+  if (totalPages <= 1) {
+    feedPagination.hidden = true;
+    feedPagination.innerHTML = "";
+    return;
+  }
+  const disabled = "";
+  const pages = pageWindow(page, totalPages).map((value) => {
+    if (value === "ellipsis") {
+      return `<span class="pagination-ellipsis" aria-label="${i18n("pagination.ellipsis")}">...</span>`;
+    }
+    const current = value === page;
+    return `
+      <button class="pagination-page" type="button" data-feed-page="${value}" aria-current="${current ? "page" : "false"}"${disabled}>
+        ${value}
+      </button>
+    `;
+  }).join("");
+  feedPagination.hidden = false;
+  feedPagination.innerHTML = `
+    <div class="pagination-pages" role="group" aria-label="${i18n("pagination.feed")}">
+      <button class="pagination-step" type="button" data-feed-page="${page - 1}"${page <= 1 ? " disabled" : disabled}>${i18n("pagination.previous")}</button>
+      ${pages}
+      <button class="pagination-step" type="button" data-feed-page="${page + 1}"${page >= totalPages ? " disabled" : disabled}>${i18n("pagination.next")}</button>
+    </div>
+    <form class="pagination-jump" data-pagination-jump>
+      <label>
+        <span>${i18n("pagination.jumpLabel")}</span>
+        <input type="number" min="1" max="${totalPages}" value="${page}" inputmode="numeric" aria-label="${i18n("pagination.jumpLabel")}">
+      </label>
+      <button type="submit"${disabled}>${i18n("pagination.jump")}</button>
+    </form>
+  `;
+  feedPagination.querySelectorAll("[data-feed-page]").forEach((button) => {
+    button.addEventListener("click", () => setFeedPage(button.dataset.feedPage));
+  });
+  feedPagination.querySelector("[data-pagination-jump]")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const input = event.currentTarget.querySelector("input");
+    setFeedPage(input?.value || "1");
+  });
 }
 
 function bindArticleActions(root) {
@@ -2309,6 +2298,7 @@ function closeMediaModal() {
 
 function submitSearch() {
   state.query = search.value.trim();
+  resetFeedPage();
   window.clearTimeout(search._timer);
   suggestions.hidden = true;
   suggestions.innerHTML = "";
@@ -2353,6 +2343,7 @@ async function loadSuggestions() {
       button.addEventListener("click", () => {
         search.value = button.dataset.query || button.dataset.title || "";
         state.query = search.value.trim();
+        resetFeedPage();
         suggestions.hidden = true;
         loadAll();
       });
@@ -2451,6 +2442,7 @@ function initMultiSelects() {
 }
 
 filters.addEventListener("change", () => {
+  resetFeedPage();
   syncDateMode();
   loadAll();
   loadSuggestions();
@@ -2461,6 +2453,7 @@ navButtons.forEach((button) => {
     if (target === state.view) return;
     if (target === "today") {
       setViewMode("today");
+      resetFeedPage();
       loadAll();
     } else if (target === "briefs") {
       loadDailyBriefs();
@@ -2478,6 +2471,7 @@ navButtons.forEach((button) => {
       setViewMode("more");
     } else {
       setViewMode("today");
+      resetFeedPage();
       loadAll();
     }
   });
@@ -2501,6 +2495,7 @@ search.addEventListener("keydown", (event) => {
 clearSearch.addEventListener("click", () => {
   search.value = "";
   state.query = "";
+  resetFeedPage();
   hideSuggestions();
   loadAll();
 });

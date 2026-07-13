@@ -135,6 +135,8 @@ def api_feed(
     orden: str = "Puntaje",
     q: str | None = None,
     lang: str = "es",
+    page: str | None = "1",
+    page_size: str | None = "24",
 ):
     return web_services.get_feed(
         fecha=fecha,
@@ -144,6 +146,8 @@ def api_feed(
         orden=orden,
         q=q,
         lang=lang,
+        page=page,
+        page_size=page_size,
         user_id=user.id if user else None,
     )
 

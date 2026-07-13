@@ -200,6 +200,68 @@ class WebServiceTestCase(unittest.TestCase):
         self.assertEqual(all_result["fecha"], "all")
         self.assertEqual(all_result["hot_topics"], [])
 
+    def test_feed_paginates_selected_day_after_sort_and_dedupe(self) -> None:
+        today = datetime.now(web_services.BRIEF_TIMEZONE).date()
+        for index in range(50):
+            self.add_article(
+                f"day-{index:02d}",
+                f"Agent runtime day story {index:02d}",
+                "OpenAI Blog",
+                "ai_agents",
+                100 - index,
+                published_at=datetime(today.year, today.month, today.day, 15, tzinfo=timezone.utc),
+            )
+
+        first = web_services.get_feed(fecha=today.isoformat(), page=1, page_size=24)
+        second = web_services.get_feed(fecha=today.isoformat(), page=2, page_size=24)
+        third = web_services.get_feed(fecha=today.isoformat(), page=3, page_size=24)
+
+        self.assertEqual(first["total"], 50)
+        self.assertEqual(first["count"], 24)
+        self.assertEqual(first["page"], 1)
+        self.assertEqual(first["total_pages"], 3)
+        self.assertTrue(first["has_next"])
+        self.assertFalse(first["has_previous"])
+        self.assertEqual(first["items"][0]["id"], "day-00")
+        self.assertEqual(second["count"], 24)
+        self.assertEqual(second["page"], 2)
+        self.assertTrue(second["has_previous"])
+        self.assertTrue(second["has_next"])
+        self.assertEqual(second["items"][0]["id"], "day-24")
+        self.assertEqual(third["count"], 2)
+        self.assertEqual(third["page"], 3)
+        self.assertFalse(third["has_next"])
+        self.assertEqual(third["items"][0]["id"], "day-48")
+        self.assertFalse({item["id"] for item in first["items"]} & {item["id"] for item in second["items"]})
+
+    def test_feed_paginates_all_dates_and_clamps_bad_pages(self) -> None:
+        today = datetime.now(web_services.BRIEF_TIMEZONE).date()
+        for index in range(30):
+            day = today - timedelta(days=index)
+            self.add_article(
+                f"all-{index:02d}",
+                f"Agent runtime all dates story {index:02d}",
+                "OpenAI Blog",
+                "ai_agents",
+                100 - index,
+                published_at=datetime(day.year, day.month, day.day, 15, tzinfo=timezone.utc),
+                ingested_at=datetime.now(timezone.utc) - timedelta(days=index),
+            )
+
+        second = web_services.get_feed(fecha="all", page=2, page_size=10)
+        too_large = web_services.get_feed(fecha="all", page=99, page_size=10)
+        invalid = web_services.get_feed(fecha="all", page="not-a-page", page_size="bad")
+
+        self.assertEqual(second["total"], 30)
+        self.assertEqual(second["count"], 10)
+        self.assertEqual(second["page"], 2)
+        self.assertEqual(second["total_pages"], 3)
+        self.assertEqual(second["items"][0]["id"], "all-10")
+        self.assertEqual(too_large["page"], 3)
+        self.assertEqual(too_large["count"], 10)
+        self.assertEqual(invalid["page"], 1)
+        self.assertEqual(invalid["page_size"], web_services.DEFAULT_FEED_PAGE_SIZE)
+
     def test_feed_includes_low_relevance_scores_without_threshold(self) -> None:
         today = datetime.now(web_services.BRIEF_TIMEZONE).date().isoformat()
         self.add_article("technical", "Developer SDK release", "GitHub Blog", "developer_tools", 60)
@@ -856,13 +918,17 @@ class WebApiRouteTests(unittest.TestCase):
         from fastapi.testclient import TestClient
         import web_app
 
-        with patch.object(web_app.web_services, "get_feed", return_value={"items": [], "count": 0, "hot_topics": []}) as get_feed:
-            response = TestClient(web_app.app).get("/api/feed?lang=en&prioritized_fuentes=OpenAI%20Blog")
+        payload = {"items": [], "count": 0, "total": 0, "page": 2, "page_size": 24, "total_pages": 1, "hot_topics": []}
+        with patch.object(web_app.web_services, "get_feed", return_value=payload) as get_feed:
+            response = TestClient(web_app.app).get("/api/feed?lang=en&prioritized_fuentes=OpenAI%20Blog&page=2&page_size=24")
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["count"], 0)
+        self.assertEqual(response.json()["page"], 2)
         self.assertEqual(get_feed.call_args.kwargs["lang"], "en")
         self.assertEqual(get_feed.call_args.kwargs["prioritized_fuentes"], ["OpenAI Blog"])
+        self.assertEqual(get_feed.call_args.kwargs["page"], "2")
+        self.assertEqual(get_feed.call_args.kwargs["page_size"], "24")
 
     def test_protected_routes_require_authentication(self) -> None:
         from fastapi.testclient import TestClient
@@ -1213,6 +1279,37 @@ class WebUiStaticTests(unittest.TestCase):
         self.assertNotIn("Refresh feed", template)
         self.assertNotIn("refreshButton", script)
 
+    def test_feed_pagination_ui_is_present(self) -> None:
+        template = Path("templates/index.html").read_text(encoding="utf-8")
+        script = Path("static/app.js").read_text(encoding="utf-8")
+        styles = Path("static/app.css").read_text(encoding="utf-8")
+
+        self.assertIn('id="feed-pagination"', template)
+        self.assertIn('data-i18n-aria-label="pagination.feed"', template)
+        self.assertIn("page: 1", script)
+        self.assertIn("pageSize: 24", script)
+        self.assertIn('params.set("page", String(state.page))', script)
+        self.assertIn('params.set("page_size", String(state.pageSize))', script)
+        self.assertIn("function resetFeedPage()", script)
+        self.assertIn("function renderFeedPagination(data)", script)
+        self.assertIn("function pageWindow(page, totalPages)", script)
+        self.assertIn("data-feed-page", script)
+        self.assertIn("data-pagination-jump", script)
+        self.assertIn('totalPages <= 1', script)
+        self.assertIn("setFeedPaginationLoading(true)", script)
+        self.assertIn("setFeedPaginationLoading(false)", script)
+        self.assertIn("resetFeedPage();\n  syncDateMode();", script)
+        self.assertIn("resetFeedPage();\n  window.clearTimeout(search._timer);", script)
+        self.assertIn(".feed-pagination", styles)
+        self.assertIn(".pagination-page[aria-current=\"page\"]", styles)
+        self.assertIn(".pagination-jump input", styles)
+        mobile_styles = styles.rsplit("@media (max-width: 900px)", maxsplit=1)[1]
+        self.assertIn(".feed-pagination", mobile_styles)
+        self.assertIn("flex-direction: column", mobile_styles)
+        self.assertIn("justify-content: center", mobile_styles)
+        self.assertIn("width: fit-content", mobile_styles)
+        self.assertIn("min-height: 40px", mobile_styles)
+
     def test_search_mode_hides_overview_and_fetches_only_feed(self) -> None:
         template = Path("templates/index.html").read_text(encoding="utf-8")
         script = Path("static/app.js").read_text(encoding="utf-8")
@@ -1496,8 +1593,8 @@ class WebUiStaticTests(unittest.TestCase):
         self.assertIn("Usá el botón de corazón", script)
         self.assertNotIn("Saved to favorites.", script)
         self.assertNotIn("Removed from favorites.", script)
-        self.assertIn("/static/app.js?v=brief-shimmer-v3", template)
-        self.assertIn("/static/app.css?v=brief-shimmer-v3", template)
+        self.assertIn("/static/app.js?v=feed-pagination-v3", template)
+        self.assertIn("/static/app.css?v=feed-pagination-v3", template)
         self.assertIn('placeholder="Buscar"', template)
         self.assertIn('"search.placeholder": "Buscar"', script)
         self.assertIn('"search.placeholder": "Search"', script)
@@ -1530,7 +1627,6 @@ class WebUiStaticTests(unittest.TestCase):
         topbar = template.split('class="topbar"', maxsplit=1)[1].split('id="status"', maxsplit=1)[0]
         self.assertNotIn("Command center", topbar)
         self.assertIn('id="topbar-date"', template)
-        self.assertIn('data-mobile-history-panel', template)
         self.assertIn('class="field date-field"', template)
         self.assertIn("data-all-dates", template)
         self.assertIn("date-all-option", template)
@@ -1543,24 +1639,20 @@ class WebUiStaticTests(unittest.TestCase):
         self.assertIn("formatFeedDate(selectedDate)", script)
         self.assertIn('params.set("fecha", "all")', script)
         self.assertIn("function syncDateMode()", script)
-        self.assertIn("function renderMobileHistoryPanel()", script)
-        self.assertIn("function mobileHistoryDates()", script)
-        self.assertIn("function mobileHistoryEarlierDates()", script)
-        self.assertIn("function selectMobileHistoryAllDates()", script)
-        self.assertIn("data-mobile-history-date", script)
-        self.assertIn("data-mobile-history-earlier", script)
-        self.assertIn("data-mobile-history-complete", script)
-        self.assertIn("data-mobile-history-all", script)
-        self.assertIn('"mobile.earlier": "Anteriores"', script)
-        self.assertIn('"mobile.earlier": "Earlier"', script)
+        self.assertNotIn('data-mobile-history-panel', template)
+        self.assertNotIn("function renderMobileHistoryPanel()", script)
+        self.assertNotIn("function mobileHistoryDates()", script)
+        self.assertNotIn("data-mobile-history-date", script)
+        self.assertNotIn("data-mobile-history-earlier", script)
+        self.assertNotIn("data-mobile-history-complete", script)
+        self.assertNotIn("data-mobile-history-all", script)
         self.assertIn("dateInput.disabled = allDates", script)
         self.assertNotIn("dateModeLabel", script)
         self.assertIn(".date-all-option", styles)
-        self.assertIn(".mobile-history-panel", styles)
         self.assertIn(".mobile-history-chip", styles)
-        self.assertIn(".mobile-history-complete", styles)
-        self.assertIn('.mobile-history-panel[data-expanded="true"] .mobile-history-complete', styles)
-        self.assertIn(".mobile-history-panel ~ .date-field", styles)
+        self.assertNotIn(".mobile-history-panel", styles)
+        mobile_styles = styles.rsplit("@media (max-width: 900px)", maxsplit=1)[1]
+        self.assertNotIn(".mobile-history-panel ~ .date-field", mobile_styles)
         filters_styles = styles.split("\n.filters {", maxsplit=1)[1].split("}", maxsplit=1)[0]
         self.assertIn("margin-bottom: 22px", filters_styles)
         self.assertIn("input:disabled", styles)
@@ -1672,7 +1764,7 @@ class WebUiStaticTests(unittest.TestCase):
         self.assertNotIn("Cambiar tema", preferences_section)
         self.assertIn('data-view-target="sources"', template)
         self.assertIn('id="source-preferences"', template)
-        self.assertIn("/static/app.css?v=brief-shimmer-v3", template)
+        self.assertIn("/static/app.css?v=feed-pagination-v3", template)
         sources_nav_block = script.split('target === "sources"', maxsplit=1)[1].split('target === "more"', maxsplit=1)[0]
         self.assertIn("ensureUser(button)", sources_nav_block)
         source_preferences = template.split('id="source-preferences"', maxsplit=1)[1].split("</section>", maxsplit=1)[0]
@@ -1915,24 +2007,30 @@ class WebUiStaticTests(unittest.TestCase):
         self.assertIn("background: var(--control)", preference_row_styles)
         self.assertIn("border: 1px solid var(--line-soft)", preference_row_styles)
         self.assertIn("border-radius: 10px", preference_row_styles)
+        self.assertIn("display: grid", preference_row_styles)
+        self.assertIn("grid-template-columns: minmax(0, 1fr) 132px", preference_row_styles)
         self.assertIn("min-height: 58px", preference_row_styles)
         self.assertIn('.preferences-mobile-card > button > span[aria-hidden="true"]', styles)
         mobile_preference_theme_styles = styles.split(".preferences-mobile-card > .mobile-more-theme-toggle {", maxsplit=1)[1].split("}", maxsplit=1)[0]
         self.assertIn("background: var(--control)", mobile_preference_theme_styles)
         self.assertIn("border: 1px solid var(--line-soft)", mobile_preference_theme_styles)
+        self.assertIn("display: grid", mobile_preference_theme_styles)
         mobile_preference_row_styles = styles.split("  .preferences-mobile-card > button,\n  .preferences-mobile-card > .mobile-setting-row {", maxsplit=1)[1].split("}", maxsplit=1)[0]
         self.assertIn("padding: 10px 11px", mobile_preference_row_styles)
         mobile_more_row_styles = styles.split(".mobile-more-card > button,", maxsplit=1)[1].split("}", maxsplit=1)[0]
         self.assertIn(".mobile-setting-row", mobile_more_row_styles)
         self.assertIn("min-height: 62px", mobile_more_row_styles)
-        mobile_segment_selector = ".mobile-language-toggle,\n.mobile-theme-toggle-control {\n  background: var(--panel);"
+        mobile_segment_selector = ".mobile-language-toggle,\n.mobile-theme-toggle-control {\n  align-self: center;"
         self.assertIn(mobile_segment_selector, styles)
         mobile_segment_styles = styles.split(
             mobile_segment_selector,
             maxsplit=1,
         )[1].split("}", maxsplit=1)[0]
+        self.assertIn("background: var(--panel)", mobile_segment_styles)
         self.assertIn("flex: 0 0 132px", mobile_segment_styles)
+        self.assertIn("justify-self: end", mobile_segment_styles)
         self.assertIn("min-height: 38px", mobile_segment_styles)
+        self.assertIn("width: 132px", mobile_segment_styles)
         self.assertIn(".mobile-more-theme-toggle:hover", styles)
         self.assertIn('button[data-theme-choice="light"]', styles)
         self.assertIn('button[data-theme-choice="dark"]', styles)

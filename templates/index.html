@@ -10,7 +10,7 @@
     document.documentElement.dataset.theme = "dark";
     document.documentElement.lang = "es";
   </script>
-  <link rel="stylesheet" href="/static/app.css?v=brief-shimmer-v3">
+  <link rel="stylesheet" href="/static/app.css?v=feed-pagination-v3">
 </head>
 <body>
   <aside class="sidebar">
@@ -69,7 +69,6 @@
 
     <form id="filters" class="filters">
       <div class="sidebar-section feed-controls">
-        <div class="mobile-history-panel" data-mobile-history-panel aria-label="Historial" data-i18n-aria-label="brief.history"></div>
         <label class="field date-field" data-date-field>
           <input type="date" name="fecha" min="{{ min_date }}" max="{{ max_date }}" value="{{ max_date }}" aria-label="Fecha" data-i18n-aria-label="filters.date">
         </label>
@@ -235,6 +234,7 @@
         <p id="feed-meta"></p>
       </div>
       <div id="feed" class="feed"></div>
+      <nav id="feed-pagination" class="feed-pagination" aria-label="Paginación de publicaciones" data-i18n-aria-label="pagination.feed" hidden></nav>
     </section>
 
     <section id="favorites" class="favorites-view" hidden>
@@ -432,6 +432,6 @@
 
   <script>window.NEWSER_AUTH_CONFIG = {{ auth_config | tojson }};</script>
   <script src="/static/supabase-2.49.4.min.js"></script>
-  <script src="/static/app.js?v=brief-shimmer-v3"></script>
+  <script src="/static/app.js?v=feed-pagination-v3"></script>
 </body>
 </html>

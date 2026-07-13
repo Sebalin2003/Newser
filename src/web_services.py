@@ -45,6 +45,8 @@ HOT_TOPIC_SIMILARITY_THRESHOLD = 0.42
 HOT_TOPIC_MODEL_ANCHORED_SIMILARITY_THRESHOLD = 0.62
 SOURCE_PRIORITY_SORT_BOOST = 4.0
 FEED_QUERY_LIMIT = 220
+DEFAULT_FEED_PAGE_SIZE = 24
+MAX_FEED_PAGE_SIZE = 80
 HOT_TOPIC_QUERY_LIMIT = 250
 HOT_TOPIC_MODEL_PATTERN = re.compile(
     r"\b(?:gpt|claude|gemini|llama|mistral|qwen|deepseek|grok|o)\s*[-\u2010-\u2015\u2212]?\s*\d+(?:\.\d+)*\b",
@@ -453,6 +455,14 @@ def _date_condition(selected_date: date) -> Any:
     )
 
 
+def _positive_int(value: Any, default: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed > 0 else default
+
+
 def get_feed(
     fecha: str | None = None,
     fuentes: list[str] | None = None,
@@ -461,10 +471,14 @@ def get_feed(
     orden: str = "Puntaje",
     q: str | None = None,
     limit: int = 80,
+    page: int = 1,
+    page_size: int = DEFAULT_FEED_PAGE_SIZE,
     lang: str | None = None,
     user_id: str | None = None,
 ) -> dict[str, Any]:
     selected_lang = normalize_language(lang)
+    page_size = min(MAX_FEED_PAGE_SIZE, _positive_int(page_size, DEFAULT_FEED_PAGE_SIZE))
+    current_page = _positive_int(page, 1)
     config = load_config()
     all_dates = is_all_dates_filter(fecha)
     selected_date = None if all_dates else parse_filter_date(fecha)
@@ -498,8 +512,7 @@ def get_feed(
         else:
             query = query.order_by(Noticia.selected_score.desc().nullslast(), Noticia.fecha_ingesta.desc())
         if query_text:
-            row_limit = min(300, max(limit * 2, 80))
-            ids = [row_id for (row_id,) in query.with_entities(Noticia.id).limit(row_limit).all()]
+            ids = [row_id for (row_id,) in query.with_entities(Noticia.id).all()]
             if ids:
                 row_order = {row_id: index for index, row_id in enumerate(ids)}
                 rows = (
@@ -511,12 +524,8 @@ def get_feed(
                 rows.sort(key=lambda row: row_order.get(row.id, len(row_order)))
             else:
                 rows = []
-        elif selected_date is not None:
-            row_limit = 300
-            rows = query.options(load_only(*article_columns)).limit(row_limit).all()
         else:
-            row_limit = max(FEED_QUERY_LIMIT, limit)
-            rows = query.options(load_only(*article_columns)).limit(row_limit).all()
+            rows = query.options(load_only(*article_columns)).all()
         saved_by_id: dict[str, UserSavedItem] = {}
         summaries_by_id: dict[str, str] = {}
         if user_id and rows:
@@ -551,10 +560,21 @@ def get_feed(
         item["source_preference"] = "prioritized" if item.get("fuente") in prioritized_sources else "normal"
     if selected_date is not None:
         items = [item for item in items if _matches_date(item, selected_date)]
-    items = _dedupe_feed_items(_sort_items(items, orden))[:limit]
+    items = _dedupe_feed_items(_sort_items(items, orden))
+    total = len(items)
+    total_pages = max(1, (total + page_size - 1) // page_size)
+    current_page = min(current_page, total_pages)
+    start = (current_page - 1) * page_size
+    page_items = items[start:start + page_size]
     return {
-        "items": items,
-        "count": len(items),
+        "items": page_items,
+        "count": len(page_items),
+        "total": total,
+        "page": current_page,
+        "page_size": page_size,
+        "total_pages": total_pages,
+        "has_previous": current_page > 1,
+        "has_next": current_page < total_pages,
         "fecha": "all" if all_dates else selected_date.isoformat(),
         "orden": orden,
         "hot_topics": [] if (all_dates or query_text) else get_hot_topics(selected_date, lang=selected_lang),
